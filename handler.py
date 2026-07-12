@@ -37,6 +37,11 @@ def _event(submission_id, status, result, cpu, real, mem, error_message, details
     }
 
 
+def system_error_event(submission_id, message):
+    """Build a SYSTEM_ERROR judged-event envelope (shared with worker.py)."""
+    return _event(submission_id, verdict.SYSTEM_ERROR, None, 0, 0, 0, message, [])
+
+
 def process_event(event, config):
     body = build_judge_body(event)
     judge_response = call_judge_server(

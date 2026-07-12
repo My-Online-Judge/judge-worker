@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import verdict
 import worker
 
@@ -19,13 +21,13 @@ def test_system_error_event_shape():
 
 def test_handle_one_publishes_result():
     producer = MagicMock()
-    cfg = MagicMock(JUDGED_TOPIC="submission.judged")
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", JUDGE_TIMEOUT_SECONDS=30)
     event = {"submissionId": "s2"}
     with patch("worker.process_event", return_value={"submissionId": "s2", "status": 0}):
         worker.handle_one(event, cfg, producer)
     producer.send.assert_called_once_with("submission.judged", key="s2",
                                            value={"submissionId": "s2", "status": 0})
-    producer.flush.assert_called_once()
+    producer.send.return_value.get.assert_called_once_with(timeout=30)
 
 
 def test_handle_one_on_judge_failure_publishes_system_error():
@@ -37,6 +39,24 @@ def test_handle_one_on_judge_failure_publishes_system_error():
     sent = producer.send.call_args.kwargs["value"]
     assert sent["status"] == verdict.SYSTEM_ERROR
     assert "judge down" in sent["error_message"]
+
+
+def test_handle_one_raises_when_delivery_fails():
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = RuntimeError("broker rejected batch")
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", JUDGE_TIMEOUT_SECONDS=30)
+    event = {"submissionId": "s5"}
+    with patch("worker.process_event", return_value={"submissionId": "s5", "status": 0}):
+        with pytest.raises(RuntimeError):
+            worker.handle_one(event, cfg, producer)
+
+
+@pytest.mark.parametrize("event", [{}, {"submissionId": None}, {"submissionId": ""}])
+def test_handle_one_missing_submission_id_skips_without_publishing_or_raising(event):
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", JUDGE_TIMEOUT_SECONDS=30)
+    worker.handle_one(event, cfg, producer)  # must not raise
+    producer.send.assert_not_called()
 
 
 def test_run_commits_after_publish():

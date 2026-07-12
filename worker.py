@@ -1,33 +1,22 @@
 import logging
 
-import verdict
-from handler import process_event
+from handler import process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
 
 log = logging.getLogger("judge-worker")
 
 
-def system_error_event(submission_id, message):
-    return {
-        "submissionId": submission_id,
-        "status": verdict.SYSTEM_ERROR,
-        "result": None,
-        "cpu_time": 0,
-        "real_time": 0,
-        "memory": 0,
-        "error_message": message,
-        "details": [],
-    }
-
-
 def handle_one(event, config, producer):
     submission_id = event.get("submissionId")
+    if not submission_id:
+        log.error("Received event without submissionId, skipping: %r", event)
+        return
     try:
         judged = process_event(event, config)
     except Exception as exc:  # judge-server down / timeout / bad response
         log.exception("Judging failed for submission %s", submission_id)
         judged = system_error_event(submission_id, str(exc))
-    producer.send(config.JUDGED_TOPIC, key=submission_id, value=judged)
-    producer.flush()
+    future = producer.send(config.JUDGED_TOPIC, key=submission_id, value=judged)
+    future.get(timeout=config.JUDGE_TIMEOUT_SECONDS)  # block for delivery ack; raises on failure
 
 
 def run(config, consumer, producer):
