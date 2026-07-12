@@ -40,12 +40,13 @@ def test_handle_one_on_judge_failure_publishes_system_error():
 
 
 def test_run_commits_after_publish():
-    producer = MagicMock()
-    consumer = MagicMock()
+    manager = MagicMock()
+    producer = manager.producer
+    consumer = manager.consumer
     consumer.__iter__.return_value = [Msg({"submissionId": "s4"})]
     cfg = MagicMock(JUDGED_TOPIC="submission.judged")
     with patch("worker.process_event", return_value={"submissionId": "s4", "status": 0}):
         worker.run(cfg, consumer, producer)
-    # publish trước, commit sau
-    assert producer.send.called
-    consumer.commit.assert_called_once()
+    names = [c[0] for c in manager.mock_calls]
+    assert "producer.send" in names and "consumer.commit" in names
+    assert names.index("producer.send") < names.index("consumer.commit")
