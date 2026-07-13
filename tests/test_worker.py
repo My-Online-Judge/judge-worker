@@ -70,3 +70,32 @@ def test_run_commits_after_publish():
     names = [c[0] for c in manager.mock_calls]
     assert "producer.send" in names and "consumer.commit" in names
     assert names.index("producer.send") < names.index("consumer.commit")
+
+
+def test_handle_one_skips_none_event_without_publishing():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", JUDGE_TIMEOUT_SECONDS=30)
+    worker.handle_one(None, cfg, producer)  # malformed message deserialized to None
+    producer.send.assert_not_called()
+
+
+def test_run_commits_after_skipping_malformed_message():
+    manager = MagicMock()
+    producer = manager.producer
+    consumer = manager.consumer
+    consumer.__iter__.return_value = [Msg(None)]  # poison pill: value is None
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged")
+    worker.run(cfg, consumer, producer)
+    names = [c[0] for c in manager.mock_calls]
+    assert "producer.send" not in names   # nothing published for a poison pill
+    assert "consumer.commit" in names      # but the offset advances past it
+
+
+def test_safe_json_deserialize_valid():
+    assert worker.safe_json_deserialize(b'{"submissionId": "s1"}') == {"submissionId": "s1"}
+
+
+def test_safe_json_deserialize_malformed_returns_none():
+    assert worker.safe_json_deserialize(b"not json") is None
+    assert worker.safe_json_deserialize(b"\xff\xfe") is None  # invalid utf-8
+    assert worker.safe_json_deserialize(None) is None  # null value (e.g. tombstone)

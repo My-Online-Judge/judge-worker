@@ -1,3 +1,4 @@
+import json
 import logging
 
 from handler import process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
@@ -5,7 +6,19 @@ from handler import process_event, system_error_event  # noqa: F401 (re-exported
 log = logging.getLogger("judge-worker")
 
 
+def safe_json_deserialize(b):
+    if b is None:
+        return None
+    try:
+        return json.loads(b.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
 def handle_one(event, config, producer):
+    if event is None:
+        log.error("Skipping malformed (non-JSON) message")
+        return
     submission_id = event.get("submissionId")
     if not submission_id:
         log.error("Received event without submissionId, skipping: %r", event)

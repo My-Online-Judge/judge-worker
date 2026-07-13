@@ -4,7 +4,7 @@ import logging
 from kafka import KafkaConsumer, KafkaProducer
 
 from config import Config
-from worker import run
+from worker import run, safe_json_deserialize
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,7 +16,7 @@ def build_consumer(config):
         group_id=config.CONSUMER_GROUP,
         enable_auto_commit=False,
         auto_offset_reset="earliest",
-        value_deserializer=lambda b: json.loads(b.decode("utf-8")),
+        value_deserializer=safe_json_deserialize,
     )
 
 
