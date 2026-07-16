@@ -1,5 +1,5 @@
 import verdict
-from dispatcher import build_judge_body, call_judge_server
+from dispatcher import build_judge_body, dispatch_judge
 
 
 def build_judged_event(submission_id, judge_response):
@@ -44,8 +44,8 @@ def system_error_event(submission_id, message):
 
 def process_event(event, config):
     body = build_judge_body(event)
-    judge_response = call_judge_server(
-        config.JUDGE_SERVER_URL, config.JUDGE_SERVER_TOKEN, body,
+    judge_response = dispatch_judge(
+        config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body,
         timeout=config.JUDGE_TIMEOUT_SECONDS,
     )
     return build_judged_event(event["submissionId"], judge_response)

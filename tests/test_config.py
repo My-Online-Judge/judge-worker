@@ -64,3 +64,19 @@ def test_consumer_tuning_env_override(monkeypatch):
     c = _reload_config_clean(monkeypatch, "MAX_POLL_INTERVAL_MS", "MAX_POLL_RECORDS")
     assert c.MAX_POLL_INTERVAL_MS == 123456
     assert c.MAX_POLL_RECORDS == 5
+
+
+# --- T1-3: multiple judge-server URLs ---
+
+def test_judge_server_urls_splits_comma_list(monkeypatch):
+    monkeypatch.setenv("JUDGE_SERVER_URL", "http://a:8080, http://b:8080 ,http://c:8080")
+    import config
+    importlib.reload(config)
+    assert config.Config.JUDGE_SERVER_URLS == ["http://a:8080", "http://b:8080", "http://c:8080"]
+
+
+def test_judge_server_urls_single(monkeypatch):
+    monkeypatch.setenv("JUDGE_SERVER_URL", "http://only:8080")
+    import config
+    importlib.reload(config)
+    assert config.Config.JUDGE_SERVER_URLS == ["http://only:8080"]

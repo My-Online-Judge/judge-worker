@@ -17,6 +17,9 @@ def _int_env(name, default):
 class Config:
     KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
     JUDGE_SERVER_URL = os.getenv("JUDGE_SERVER_URL", "http://localhost:8080")
+    # Comma-separated list of judge-server base URLs; the dispatcher round-robins across them and
+    # fails over to the next on connection error / 5xx. A single URL is the common case.
+    JUDGE_SERVER_URLS = [u.strip() for u in JUDGE_SERVER_URL.split(",") if u.strip()]
     JUDGE_SERVER_TOKEN = os.getenv("JUDGE_SERVER_TOKEN", "default_token")
     REQUESTED_TOPIC = os.getenv("REQUESTED_TOPIC", "submission.requested")
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")

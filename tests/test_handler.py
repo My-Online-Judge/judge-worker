@@ -35,17 +35,19 @@ def test_build_judged_event_unexpected_data_is_system_error():
     assert out["details"] == []
 
 
-def test_process_event_calls_judge_server(monkeypatch):
+def test_process_event_dispatches_to_judge_servers(monkeypatch):
     event = {"submissionId": "sub-9", "src": "x", "language_config": {},
              "max_cpu_time": 1000, "max_memory": 1, "test_case_id": "p", "output": True}
 
     class Cfg:
-        JUDGE_SERVER_URL = "http://js:8080"
+        JUDGE_SERVER_URLS = ["http://js1:8080", "http://js2:8080"]
         JUDGE_SERVER_TOKEN = "t"
         JUDGE_TIMEOUT_SECONDS = 30
 
-    with patch("handler.call_judge_server", return_value={"err": None, "data": []}) as m:
+    with patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
         out = handler.process_event(event, Cfg)
     m.assert_called_once()
+    # process_event hands the full URL list to the dispatcher (which does round-robin/failover)
+    assert m.call_args.args[0] == ["http://js1:8080", "http://js2:8080"]
     assert out["submissionId"] == "sub-9"
     assert out["status"] == verdict.ACCEPTED
