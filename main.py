@@ -17,6 +17,12 @@ def build_consumer(config):
         enable_auto_commit=False,
         auto_offset_reset="earliest",
         value_deserializer=safe_json_deserialize,
+        # T2-5: tune for slow, one-at-a-time judging so a busy worker is not mistaken for a dead
+        # one and evicted (which causes rebalance churn and duplicate verdicts).
+        max_poll_records=config.MAX_POLL_RECORDS,
+        max_poll_interval_ms=config.MAX_POLL_INTERVAL_MS,
+        session_timeout_ms=config.SESSION_TIMEOUT_MS,
+        heartbeat_interval_ms=config.HEARTBEAT_INTERVAL_MS,
     )
 
 
