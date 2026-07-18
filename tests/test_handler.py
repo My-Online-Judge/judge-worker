@@ -44,7 +44,8 @@ def test_process_event_dispatches_to_judge_servers(monkeypatch):
         JUDGE_SERVER_TOKEN = "t"
         JUDGE_TIMEOUT_SECONDS = 30
 
-    with patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
+    with patch("handler.ensure_present"), \
+         patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
         out = handler.process_event(event, Cfg)
     m.assert_called_once()
     # process_event hands the full URL list to the dispatcher (which does round-robin/failover)
