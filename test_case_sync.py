@@ -10,6 +10,17 @@ from config import Config
 log = logging.getLogger("judge-worker")
 
 
+def _safe_extract_zip(zip_path, dest_dir):
+    """Extract a zip into dest_dir, refusing any entry that would escape it (zip-slip)."""
+    dest_root = os.path.realpath(dest_dir)
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.namelist():
+            target = os.path.realpath(os.path.join(dest_dir, member))
+            if target != dest_root and not target.startswith(dest_root + os.sep):
+                raise ValueError(f"Unsafe path in test-case bundle (zip-slip): {member}")
+        zf.extractall(dest_dir)
+
+
 def _default_client():
     # Imported lazily so unit tests (which inject a fake client) need no `minio` install.
     from minio import Minio
@@ -42,8 +53,7 @@ def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):
     tmp_zip = os.path.join(tmp_dir, "bundle.zip")
     try:
         client.fget_object(bucket, key, tmp_zip)
-        with zipfile.ZipFile(tmp_zip) as zf:
-            zf.extractall(tmp_dir)
+        _safe_extract_zip(tmp_zip, tmp_dir)
         os.remove(tmp_zip)
         try:
             os.replace(tmp_dir, dest)  # atomic install

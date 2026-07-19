@@ -104,3 +104,40 @@ def test_ensure_present_download_failure_cleans_up(tmp_path):
     with pytest.raises(RuntimeError):
         ensure_present("slug__abc", cache_root=str(tmp_path), client=client, bucket="b")
     assert os.listdir(tmp_path) == []  # no partial cache dir left behind
+
+
+def test_safe_extract_rejects_zip_slip(tmp_path):
+    from test_case_sync import _safe_extract_zip
+    zip_path = tmp_path / "evil.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("../escape.txt", "pwned")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    with pytest.raises(ValueError):
+        _safe_extract_zip(str(zip_path), str(dest))
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_safe_extract_accepts_normal_entries(tmp_path):
+    from test_case_sync import _safe_extract_zip
+    zip_path = tmp_path / "ok.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("info", "{}")
+        zf.writestr("1.in", "x")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    _safe_extract_zip(str(zip_path), str(dest))
+    assert (dest / "info").exists()
+    assert (dest / "1.in").exists()
+
+
+def test_ensure_present_rejects_zip_slip_bundle(tmp_path):
+    from test_case_sync import ensure_present
+    class _SlipClient:
+        def fget_object(self, bucket, key, dest):
+            with zipfile.ZipFile(dest, "w") as zf:
+                zf.writestr("../escape.txt", "pwned")
+    with pytest.raises(ValueError):
+        ensure_present("slug__abc", cache_root=str(tmp_path), client=_SlipClient(), bucket="b")
+    assert os.listdir(tmp_path) == []              # temp dir cleaned up
+    assert not (tmp_path / "escape.txt").exists()
