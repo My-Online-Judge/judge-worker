@@ -39,3 +39,15 @@ class Config:
     # comfortably below the session timeout as Kafka requires.
     SESSION_TIMEOUT_MS = _int_env("SESSION_TIMEOUT_MS", 30000)
     HEARTBEAT_INTERVAL_MS = _int_env("HEARTBEAT_INTERVAL_MS", 10000)
+
+    # --- Test-case object storage (MinIO) ---
+    MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+    MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+    MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    MINIO_BUCKET = os.getenv("MINIO_BUCKET", "test-cases")
+    # Shared volume the sandbox mounts at /test_case; the worker syncs bundles here before judging.
+    TEST_CASE_CACHE_DIR = os.getenv("TEST_CASE_CACHE_DIR", "/test_case")
+    # Age-based GC of the cache volume: evict installed bundle dirs unused for this long...
+    TEST_CASE_CACHE_TTL_SECONDS = int(os.getenv("TEST_CASE_CACHE_TTL_SECONDS", "86400"))
+    # ...checked at most this often (rate-limited via a `.last_sweep` marker file).
+    TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS = int(os.getenv("TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS", "3600"))

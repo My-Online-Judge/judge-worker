@@ -4,9 +4,14 @@ import logging
 from kafka import KafkaConsumer, KafkaProducer
 
 from config import Config
+from log_context import SubmissionIdFilter
 from worker import run, safe_json_deserialize
 
-logging.basicConfig(level=logging.INFO)
+_handler = logging.StreamHandler()
+_handler.addFilter(SubmissionIdFilter())
+_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)s [%(submission_id)s] %(name)s: %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 
 
 def build_consumer(config):
