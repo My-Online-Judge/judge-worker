@@ -1,3 +1,4 @@
+import errno
 import io
 import os
 import zipfile
@@ -55,3 +56,51 @@ def test_malformed_id_raises(tmp_path):
     with pytest.raises(ValueError):
         test_case_sync.ensure_present("no-double-underscore", cache_root=str(tmp_path),
                                       client=FakeClient(b""), bucket="b")
+
+
+def _write_bundle_zip(dest_path, files=None):
+    """Write a valid test-case bundle zip to dest_path."""
+    files = files or {"info": '{"test_case_number": 1}', "1.in": "1 2\n", "1.out": "3\n"}
+    with zipfile.ZipFile(dest_path, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+
+
+class _ZipClient:
+    """Fake MinIO client: writes a valid bundle zip, or raises a preset error."""
+    def __init__(self, files=None, error=None):
+        self._files = files
+        self._error = error
+
+    def fget_object(self, bucket, key, dest):
+        if self._error:
+            raise self._error
+        _write_bundle_zip(dest, self._files)
+
+
+def test_ensure_present_race_loser_is_swallowed(tmp_path, monkeypatch):
+    from test_case_sync import ensure_present
+    def fake_replace(src, dst):
+        raise OSError(errno.ENOTEMPTY, "directory not empty")
+    monkeypatch.setattr(os, "replace", fake_replace)
+    dest = ensure_present("slug__abc", cache_root=str(tmp_path), client=_ZipClient(), bucket="b")
+    assert dest == os.path.join(str(tmp_path), "slug__abc")
+    assert os.listdir(tmp_path) == []  # temp dir cleaned; winner's dest not created by us
+
+
+def test_ensure_present_non_race_oserror_propagates(tmp_path, monkeypatch):
+    from test_case_sync import ensure_present
+    def fake_replace(src, dst):
+        raise OSError(errno.EACCES, "permission denied")
+    monkeypatch.setattr(os, "replace", fake_replace)
+    with pytest.raises(OSError):
+        ensure_present("slug__abc", cache_root=str(tmp_path), client=_ZipClient(), bucket="b")
+    assert os.listdir(tmp_path) == []  # temp dir cleaned up
+
+
+def test_ensure_present_download_failure_cleans_up(tmp_path):
+    from test_case_sync import ensure_present
+    client = _ZipClient(error=RuntimeError("network down"))
+    with pytest.raises(RuntimeError):
+        ensure_present("slug__abc", cache_root=str(tmp_path), client=client, bucket="b")
+    assert os.listdir(tmp_path) == []  # no partial cache dir left behind

@@ -1,3 +1,4 @@
+import errno
 import logging
 import os
 import shutil
@@ -46,9 +47,14 @@ def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):
         os.remove(tmp_zip)
         try:
             os.replace(tmp_dir, dest)  # atomic install
-        except OSError:
-            # Another worker won the race and already installed this bundle.
+        except OSError as e:
+            # ENOTEMPTY/EEXIST == another worker already installed this bundle (benign race).
+            # Any other OSError (ENOSPC, EACCES, EXDEV, ...) is a real failure — let it propagate.
+            if e.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
             shutil.rmtree(tmp_dir, ignore_errors=True)
+            log.debug("Test-case bundle %s already installed by another worker", test_case_id)
+            return dest
         log.info("Synced test-case bundle %s from MinIO (%s)", test_case_id, key)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
