@@ -1,5 +1,6 @@
 import verdict
 from dispatcher import build_judge_body, dispatch_judge
+from log_context import submission_id_var
 from test_case_sync import ensure_present, maybe_sweep
 
 
@@ -44,11 +45,15 @@ def system_error_event(submission_id, message):
 
 
 def process_event(event, config):
-    maybe_sweep()  # rate-limited; prunes stale cached bundles
-    ensure_present(event["test_case_id"])
-    body = build_judge_body(event)
-    judge_response = dispatch_judge(
-        config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body,
-        timeout=config.JUDGE_TIMEOUT_SECONDS,
-    )
-    return build_judged_event(event["submissionId"], judge_response)
+    token = submission_id_var.set(str(event.get("submissionId", "-")))
+    try:
+        maybe_sweep()  # rate-limited; prunes stale cached bundles
+        ensure_present(event["test_case_id"])
+        body = build_judge_body(event)
+        judge_response = dispatch_judge(
+            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body,
+            timeout=config.JUDGE_TIMEOUT_SECONDS,
+        )
+        return build_judged_event(event["submissionId"], judge_response)
+    finally:
+        submission_id_var.reset(token)
