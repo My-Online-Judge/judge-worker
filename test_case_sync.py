@@ -81,20 +81,27 @@ def sweep_cache(cache_root, ttl_seconds, now):
     """Delete installed bundle dirs under cache_root not used within ttl_seconds.
 
     An installed bundle is a child dir containing an `info` file; in-progress temp dirs
-    (no `info`) are never touched. Returns the sorted list of evicted dir names.
+    (no `info`) are never touched. Resilient to concurrent removal by another worker
+    (a vanished entry is skipped, not fatal). Returns the sorted list of evicted dir names.
     """
     evicted = []
-    if not os.path.isdir(cache_root):
+    try:
+        names = sorted(os.listdir(cache_root))
+    except OSError:
         return evicted
-    for name in sorted(os.listdir(cache_root)):
+    for name in names:
         path = os.path.join(cache_root, name)
-        if not os.path.isdir(path):
+        try:
+            if not os.path.isdir(path):
+                continue
+            if not os.path.exists(os.path.join(path, "info")):
+                continue  # in-progress install — leave it
+            if now - os.path.getmtime(path) > ttl_seconds:
+                shutil.rmtree(path, ignore_errors=True)
+                evicted.append(name)
+        except OSError:
+            # Entry vanished mid-sweep (another worker won) or became inaccessible — skip it.
             continue
-        if not os.path.exists(os.path.join(path, "info")):
-            continue  # in-progress install — leave it
-        if now - os.path.getmtime(path) > ttl_seconds:
-            shutil.rmtree(path, ignore_errors=True)
-            evicted.append(name)
     return evicted
 
 

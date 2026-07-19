@@ -181,3 +181,20 @@ def test_maybe_sweep_respects_interval(tmp_path):
     ev2 = maybe_sweep(str(tmp_path), ttl_seconds=86_400, interval_seconds=3600, now=now + 10)
     assert ev2 == []              # within interval → skipped
     assert stale2.exists()
+
+
+def test_sweep_cache_tolerates_concurrent_removal(tmp_path, monkeypatch):
+    from test_case_sync import sweep_cache
+    now = 1_000_000.0
+    gone = tmp_path / "slug__gone"; gone.mkdir(); (gone / "info").write_text("{}")
+    stale = tmp_path / "slug__stale"; stale.mkdir(); (stale / "info").write_text("{}")
+    os.utime(gone, (now - 100_000, now - 100_000))
+    os.utime(stale, (now - 100_000, now - 100_000))
+    real_getmtime = os.path.getmtime
+    def flaky_getmtime(p):
+        if str(p).endswith("slug__gone"):
+            raise FileNotFoundError("vanished mid-sweep")
+        return real_getmtime(p)
+    monkeypatch.setattr(os.path, "getmtime", flaky_getmtime)
+    evicted = sweep_cache(str(tmp_path), ttl_seconds=86_400, now=now)
+    assert evicted == ["slug__stale"]   # gone skipped without crashing, stale still evicted
