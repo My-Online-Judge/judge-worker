@@ -126,11 +126,11 @@ def maybe_sweep(cache_root=None, ttl_seconds=None, interval_seconds=None, now=No
             return []
         with open(marker, "a"):
             os.utime(marker, (now, now))  # claim this interval before sweeping
-    except OSError:
-        # Cache volume not (yet) accessible — GC is best-effort and must never break judging.
-        log.warning("Cache sweep skipped: cache_root %s is not accessible", cache_root)
+        evicted = sweep_cache(cache_root, ttl_seconds, now)
+        if evicted:
+            log.info("Cache sweep evicted %d stale bundle(s): %s", len(evicted), evicted)
+        return evicted
+    except Exception:
+        # GC is best-effort and must never break judging (maybe_sweep runs on the submission path).
+        log.warning("Cache sweep skipped for %s (inaccessible or failed)", cache_root)
         return []
-    evicted = sweep_cache(cache_root, ttl_seconds, now)
-    if evicted:
-        log.info("Cache sweep evicted %d stale bundle(s): %s", len(evicted), evicted)
-    return evicted
