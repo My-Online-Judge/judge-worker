@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import zipfile
 
 from config import Config
@@ -40,6 +41,10 @@ def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):
     bucket = bucket or Config.MINIO_BUCKET
     dest = os.path.join(cache_root, test_case_id)
     if os.path.exists(os.path.join(dest, "info")):
+        try:
+            os.utime(dest, None)  # mark recently used so the age sweep keeps it
+        except OSError:
+            pass
         return dest
 
     slug, sep, digest = test_case_id.rpartition("__")
@@ -70,3 +75,55 @@ def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
     return dest
+
+
+def sweep_cache(cache_root, ttl_seconds, now):
+    """Delete installed bundle dirs under cache_root not used within ttl_seconds.
+
+    An installed bundle is a child dir containing an `info` file; in-progress temp dirs
+    (no `info`) are never touched. Returns the sorted list of evicted dir names.
+    """
+    evicted = []
+    if not os.path.isdir(cache_root):
+        return evicted
+    for name in sorted(os.listdir(cache_root)):
+        path = os.path.join(cache_root, name)
+        if not os.path.isdir(path):
+            continue
+        if not os.path.exists(os.path.join(path, "info")):
+            continue  # in-progress install — leave it
+        if now - os.path.getmtime(path) > ttl_seconds:
+            shutil.rmtree(path, ignore_errors=True)
+            evicted.append(name)
+    return evicted
+
+
+def maybe_sweep(cache_root=None, ttl_seconds=None, interval_seconds=None, now=None):
+    """Rate-limited driver for sweep_cache. Runs at most once per interval_seconds,
+    coordinated across workers by the mtime of a `.last_sweep` marker in cache_root."""
+    cache_root = cache_root or Config.TEST_CASE_CACHE_DIR
+    if ttl_seconds is None:
+        ttl_seconds = Config.TEST_CASE_CACHE_TTL_SECONDS
+    if interval_seconds is None:
+        interval_seconds = Config.TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS
+    if now is None:
+        now = time.time()
+    marker = os.path.join(cache_root, ".last_sweep")
+    try:
+        os.makedirs(cache_root, exist_ok=True)
+        try:
+            last = os.path.getmtime(marker)
+        except OSError:
+            last = 0
+        if now - last < interval_seconds:
+            return []
+        with open(marker, "a"):
+            os.utime(marker, (now, now))  # claim this interval before sweeping
+    except OSError:
+        # Cache volume not (yet) accessible — GC is best-effort and must never break judging.
+        log.warning("Cache sweep skipped: cache_root %s is not accessible", cache_root)
+        return []
+    evicted = sweep_cache(cache_root, ttl_seconds, now)
+    if evicted:
+        log.info("Cache sweep evicted %d stale bundle(s): %s", len(evicted), evicted)
+    return evicted

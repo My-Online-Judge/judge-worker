@@ -47,3 +47,7 @@ class Config:
     MINIO_BUCKET = os.getenv("MINIO_BUCKET", "test-cases")
     # Shared volume the sandbox mounts at /test_case; the worker syncs bundles here before judging.
     TEST_CASE_CACHE_DIR = os.getenv("TEST_CASE_CACHE_DIR", "/test_case")
+    # Age-based GC of the cache volume: evict installed bundle dirs unused for this long...
+    TEST_CASE_CACHE_TTL_SECONDS = int(os.getenv("TEST_CASE_CACHE_TTL_SECONDS", "86400"))
+    # ...checked at most this often (rate-limited via a `.last_sweep` marker file).
+    TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS = int(os.getenv("TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS", "3600"))

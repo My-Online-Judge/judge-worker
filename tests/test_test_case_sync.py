@@ -1,6 +1,7 @@
 import errno
 import io
 import os
+import time
 import zipfile
 
 import pytest
@@ -141,3 +142,42 @@ def test_ensure_present_rejects_zip_slip_bundle(tmp_path):
         ensure_present("slug__abc", cache_root=str(tmp_path), client=_SlipClient(), bucket="b")
     assert os.listdir(tmp_path) == []              # temp dir cleaned up
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_sweep_cache_evicts_stale_keeps_fresh_and_inprogress(tmp_path):
+    from test_case_sync import sweep_cache
+    now = 1_000_000.0
+    old = tmp_path / "slug__old"; old.mkdir(); (old / "info").write_text("{}")
+    fresh = tmp_path / "slug__fresh"; fresh.mkdir(); (fresh / "info").write_text("{}")
+    inprogress = tmp_path / "tmp_partial"; inprogress.mkdir()  # no info file
+    os.utime(old, (now - 100_000, now - 100_000))
+    os.utime(fresh, (now - 10, now - 10))
+    os.utime(inprogress, (now - 100_000, now - 100_000))
+    evicted = sweep_cache(str(tmp_path), ttl_seconds=86_400, now=now)
+    assert evicted == ["slug__old"]
+    assert not old.exists()
+    assert fresh.exists()
+    assert inprogress.exists()
+
+
+def test_ensure_present_cache_hit_bumps_mtime(tmp_path):
+    from test_case_sync import ensure_present
+    dest = tmp_path / "slug__abc"; dest.mkdir(); (dest / "info").write_text("{}")
+    os.utime(dest, (1000.0, 1000.0))
+    result = ensure_present("slug__abc", cache_root=str(tmp_path), client=None, bucket="b")
+    assert result == str(dest)
+    assert os.path.getmtime(dest) > 1000.0  # bumped toward now
+
+
+def test_maybe_sweep_respects_interval(tmp_path):
+    from test_case_sync import maybe_sweep
+    now = 1_000_000.0
+    stale = tmp_path / "slug__old"; stale.mkdir(); (stale / "info").write_text("{}")
+    os.utime(stale, (now - 100_000, now - 100_000))
+    ev1 = maybe_sweep(str(tmp_path), ttl_seconds=86_400, interval_seconds=3600, now=now)
+    assert ev1 == ["slug__old"]
+    stale2 = tmp_path / "slug__old2"; stale2.mkdir(); (stale2 / "info").write_text("{}")
+    os.utime(stale2, (now - 100_000, now - 100_000))
+    ev2 = maybe_sweep(str(tmp_path), ttl_seconds=86_400, interval_seconds=3600, now=now + 10)
+    assert ev2 == []              # within interval → skipped
+    assert stale2.exists()
