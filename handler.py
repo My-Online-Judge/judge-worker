@@ -1,7 +1,10 @@
+import logging
 import verdict
 from dispatcher import build_judge_body, dispatch_judge
 from log_context import submission_id_var
 from test_case_sync import ensure_present, maybe_sweep
+
+log = logging.getLogger("judge-worker")
 
 
 def build_judged_event(submission_id, judge_response):
@@ -47,6 +50,7 @@ def system_error_event(submission_id, message):
 def process_event(event, config):
     token = submission_id_var.set(str(event.get("submissionId", "-")))
     try:
+        log.info("Judging submission %s", event.get("submissionId", "-"))
         maybe_sweep()  # rate-limited; prunes stale cached bundles
         ensure_present(event["test_case_id"])
         body = build_judge_body(event)

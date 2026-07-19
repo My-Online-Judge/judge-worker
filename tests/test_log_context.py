@@ -25,10 +25,14 @@ def test_filter_defaults_to_dash_when_unset():
 def test_process_event_sets_and_resets_contextvar(monkeypatch):
     import handler
     from log_context import submission_id_var
+    captured = {}
     # stub the judging pipeline so process_event runs without a live stack
     monkeypatch.setattr(handler, "maybe_sweep", lambda: None)
     monkeypatch.setattr(handler, "ensure_present", lambda tcid: None)
-    monkeypatch.setattr(handler, "build_judge_body", lambda e: {})
+    def capture_body(e):
+        captured["during"] = submission_id_var.get()
+        return {}
+    monkeypatch.setattr(handler, "build_judge_body", capture_body)
     monkeypatch.setattr(handler, "dispatch_judge", lambda *a, **k: {"err": None, "data": []})
 
     class Cfg:
@@ -36,4 +40,5 @@ def test_process_event_sets_and_resets_contextvar(monkeypatch):
     event = {"submissionId": "sub-9", "test_case_id": "slug__h"}
 
     handler.process_event(event, Cfg())
-    assert submission_id_var.get() == "-"  # reset after processing
+    assert captured["during"] == "sub-9"   # set DURING processing
+    assert submission_id_var.get() == "-"  # reset AFTER
