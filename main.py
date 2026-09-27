@@ -3,6 +3,7 @@ import logging
 
 from kafka import KafkaConsumer, KafkaProducer
 
+import tracing
 from config import Config
 from log_context import SubmissionIdFilter
 from worker import run, safe_json_deserialize
@@ -41,5 +42,6 @@ def build_producer(config):
 
 if __name__ == "__main__":
     cfg = Config
-    logging.info("judge-worker starting, brokers=%s", cfg.KAFKA_BROKERS)
+    logging.info("judge-worker starting, brokers=%s, tracing=%s",
+                 cfg.KAFKA_BROKERS, tracing.init_tracing())
     run(cfg, build_consumer(cfg), build_producer(cfg))

@@ -13,3 +13,5 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 - JUDGE_SERVER_URL (default http://localhost:8080)
 - JUDGE_SERVER_TOKEN (default default_token)
 - REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS
+- OTEL_EXPORTER_OTLP_ENDPOINT (vd http://jaeger:4318) — bật tracing (OTLP/HTTP); không đặt thì tracing tắt hoàn toàn
+- OTEL_SERVICE_NAME (default judge-worker)

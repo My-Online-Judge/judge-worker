@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -7,8 +7,11 @@ import worker
 
 
 class Msg:
-    def __init__(self, value):
+    """Stand-in for kafka-python's ConsumerRecord: the worker reads .value and .headers."""
+
+    def __init__(self, value, headers=None):
         self.value = value
+        self.headers = headers or []
 
 
 def test_system_error_event_shape():
@@ -26,7 +29,8 @@ def test_handle_one_publishes_result():
     with patch("worker.process_event", return_value={"submissionId": "s2", "status": 0}):
         worker.handle_one(event, cfg, producer)
     producer.send.assert_called_once_with("submission.judged", key="s2",
-                                           value={"submissionId": "s2", "status": 0})
+                                           value={"submissionId": "s2", "status": 0},
+                                           headers=ANY)
     producer.send.return_value.get.assert_called_once_with(timeout=30)
 
 
