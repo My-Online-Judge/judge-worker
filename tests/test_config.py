@@ -80,3 +80,12 @@ def test_judge_server_urls_single(monkeypatch):
     import config
     importlib.reload(config)
     assert config.Config.JUDGE_SERVER_URLS == ["http://only:8080"]
+
+
+def test_sandbox_heartbeat_relay_is_off_by_default_every_10s_when_on(monkeypatch):
+    monkeypatch.delenv("SANDBOX_HEARTBEAT_URL", raising=False)
+    monkeypatch.delenv("SANDBOX_HEARTBEAT_INTERVAL_SECONDS", raising=False)
+    import config
+    importlib.reload(config)
+    assert config.Config.SANDBOX_HEARTBEAT_URL == ""
+    assert config.Config.SANDBOX_HEARTBEAT_INTERVAL_SECONDS == 10

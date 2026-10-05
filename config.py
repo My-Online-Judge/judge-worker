@@ -25,6 +25,11 @@ class Config:
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
+    # submission-service's judge-server registry. The sandboxes cannot reach it (internal network), so
+    # the worker relays each one's /ping there. Empty = no relay.
+    SANDBOX_HEARTBEAT_URL = os.getenv("SANDBOX_HEARTBEAT_URL", "")
+    # Below the registry's 30 s liveness window, so one missed report does not flip a sandbox offline.
+    SANDBOX_HEARTBEAT_INTERVAL_SECONDS = _int_env("SANDBOX_HEARTBEAT_INTERVAL_SECONDS", 10)
 
     # --- Consumer poll / rebalance tuning ---
     # Judging is slow and blocking, so fetch a single submission per poll: a large batch would
