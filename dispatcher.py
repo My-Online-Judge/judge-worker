@@ -43,11 +43,15 @@ def call_judge_server(base_url, token, body, timeout=30):
 
 
 def _is_retryable(exc):
-    """A dead/unhealthy sandbox is worth failing over: connection errors, timeouts and 5xx.
-    A 4xx is a deterministic client error (same request fails everywhere) — do not fail over."""
+    """A dead/unhealthy sandbox is worth failing over: connection errors (incl. connect timeouts) and 5xx.
+    A 4xx is a deterministic client error (same request fails everywhere) — do not fail over.
+    Nor on a read timeout: the sandbox has the request and is still judging, so a second sandbox would
+    judge the same submission again — double the CPU exactly when the sandboxes are busiest."""
     if isinstance(exc, requests.HTTPError):
         resp = exc.response
         return resp is not None and 500 <= resp.status_code < 600
+    if isinstance(exc, requests.ReadTimeout):
+        return False
     return isinstance(exc, requests.RequestException)
 
 

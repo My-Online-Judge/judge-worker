@@ -96,6 +96,27 @@ def test_dispatch_does_not_fail_over_on_4xx(mock_call):
 
 
 @patch("dispatcher.call_judge_server")
+def test_dispatch_does_not_fail_over_on_read_timeout(mock_call):
+    # The sandbox accepted the request and is still judging: re-sending it would judge the same
+    # submission twice, on the other sandbox, exactly when both are loaded.
+    dispatcher.reset_round_robin()
+    mock_call.side_effect = [requests.ReadTimeout("still judging"), {"err": None, "data": []}]
+    with pytest.raises(requests.ReadTimeout):
+        dispatcher.dispatch_judge(["http://a:8080", "http://b:8080"], "t", {}, timeout=5)
+    assert mock_call.call_count == 1
+
+
+@patch("dispatcher.call_judge_server")
+def test_dispatch_fails_over_on_connect_timeout(mock_call):
+    # ConnectTimeout is a Timeout too, but the sandbox never got the request — still worth failing over.
+    dispatcher.reset_round_robin()
+    mock_call.side_effect = [requests.ConnectTimeout("unreachable"), {"err": None, "data": []}]
+    out = dispatcher.dispatch_judge(["http://a:8080", "http://b:8080"], "t", {}, timeout=5)
+    assert out == {"err": None, "data": []}
+    assert mock_call.call_count == 2
+
+
+@patch("dispatcher.call_judge_server")
 def test_dispatch_raises_when_all_urls_fail(mock_call):
     dispatcher.reset_round_robin()
     mock_call.side_effect = requests.ConnectionError("down")
