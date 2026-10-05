@@ -10,7 +10,7 @@ import tracing
 import verdict
 import worker
 
-# A traceparent exactly as the OpenTelemetry Java agent writes it into judge-api's Kafka record.
+# A traceparent exactly as the OpenTelemetry Java agent writes it into submission-service's Kafka record.
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 PARENT_SPAN_ID = "00f067aa0ba902b7"
 TRACEPARENT = f"00-{TRACE_ID}-{PARENT_SPAN_ID}-01".encode()
@@ -47,7 +47,7 @@ def test_judging_continues_the_trace_from_the_requested_record(spans):
     assert format(span.parent.span_id, "016x") == PARENT_SPAN_ID
     assert span.attributes["oj.submission_id"] == "s1"
     assert span.attributes["oj.verdict_status"] == 0
-    # The verdict record carries OUR span as parent, so judge-api's consumer joins this trace.
+    # The verdict record carries OUR span as parent, so submission-service's consumer joins this trace.
     assert _sent_traceparent(producer) == f"00-{TRACE_ID}-{format(span.context.span_id, '016x')}-01"
 
 

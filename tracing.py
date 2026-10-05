@@ -3,7 +3,7 @@
 The Java services are traced by the OpenTelemetry Java agent, which writes a W3C `traceparent`
 header into every Kafka record they produce. The worker continues that trace: it reads the header
 from `submission.requested`, judges inside a child span, and writes its own context into the
-`submission.judged` record so judge-api's verdict consumer joins the same trace.
+`submission.judged` record so submission-service's verdict consumer joins the same trace.
 """
 import os
 

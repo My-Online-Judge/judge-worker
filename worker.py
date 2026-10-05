@@ -26,7 +26,7 @@ def handle_one(event, config, producer, headers=None):
     if not submission_id:
         log.error("Received event without submissionId, skipping: %r", event)
         return
-    # Continue the trace judge-api started (its Kafka record carries `traceparent`), so one
+    # Continue the trace submission-service started (its Kafka record carries `traceparent`), so one
     # submission is a single trace from HTTP submit to stored verdict.
     with tracing.tracer().start_as_current_span(
             "judge submission",

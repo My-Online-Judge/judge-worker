@@ -1,4 +1,4 @@
-"""Verdict codes — MUST match judge-api SubmissionResult enum exactly."""
+"""Verdict codes — MUST match submission-service's SubmissionResult enum exactly."""
 
 COMPILE_ERROR = -2
 WRONG_ANSWER = -1
@@ -11,7 +11,7 @@ SYSTEM_ERROR = 5
 
 
 def resolve_verdict(details):
-    """Resolve verdict from testcase details. Mirrors judge-api's resolveVerdict logic.
+    """Resolve verdict from testcase details. The logic judge-api's resolveVerdict had; the worker now owns it.
 
     Rules (in order):
     1. Sandbox error (error != 0) anywhere -> SYSTEM_ERROR (overrides all)
