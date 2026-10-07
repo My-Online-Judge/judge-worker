@@ -3,6 +3,7 @@ import logging
 
 from kafka import KafkaConsumer, KafkaProducer
 
+import metrics
 import sandbox_status
 import tracing
 from config import Config
@@ -45,5 +46,6 @@ if __name__ == "__main__":
     cfg = Config
     logging.info("judge-worker starting, brokers=%s, tracing=%s",
                  cfg.KAFKA_BROKERS, tracing.init_tracing())
+    metrics.start(cfg)
     sandbox_status.start(cfg)
     run(cfg, build_consumer(cfg), build_producer(cfg))

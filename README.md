@@ -13,6 +13,7 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 - JUDGE_SERVER_URL (default http://localhost:8080)
 - JUDGE_SERVER_TOKEN (default default_token)
 - REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS
+- METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total
 - SANDBOX_HEARTBEAT_URL (vd http://submission-service:8000/api/judge_server_heartbeat/) — worker chuyển `/ping` của
   từng sandbox về registry thay cho sandbox (sandbox ở mạng internal, không tới được submission-service);
   không đặt thì tắt. SANDBOX_HEARTBEAT_INTERVAL_SECONDS (default 10)

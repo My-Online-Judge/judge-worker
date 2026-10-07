@@ -30,6 +30,9 @@ class Config:
     SANDBOX_HEARTBEAT_URL = os.getenv("SANDBOX_HEARTBEAT_URL", "")
     # Below the registry's 30 s liveness window, so one missed report does not flip a sandbox offline.
     SANDBOX_HEARTBEAT_INTERVAL_SECONDS = _int_env("SANDBOX_HEARTBEAT_INTERVAL_SECONDS", 10)
+    # Prometheus scrapes /metrics here (job judge-worker): sandbox health and dispatch counts. Not published on the
+    # host; being scrapable at all is the worker's liveness signal (alert JudgeWorkerDown).
+    METRICS_PORT = _int_env("METRICS_PORT", 9100)
 
     # --- Consumer poll / rebalance tuning ---
     # Judging is slow and blocking, so fetch a single submission per poll: a large batch would

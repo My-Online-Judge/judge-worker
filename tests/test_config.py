@@ -89,3 +89,10 @@ def test_sandbox_heartbeat_relay_is_off_by_default_every_10s_when_on(monkeypatch
     importlib.reload(config)
     assert config.Config.SANDBOX_HEARTBEAT_URL == ""
     assert config.Config.SANDBOX_HEARTBEAT_INTERVAL_SECONDS == 10
+
+
+def test_metrics_port_defaults_to_9100(monkeypatch):
+    monkeypatch.delenv("METRICS_PORT", raising=False)
+    import config
+    importlib.reload(config)
+    assert config.Config.METRICS_PORT == 9100
