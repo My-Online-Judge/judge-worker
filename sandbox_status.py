@@ -1,9 +1,11 @@
-"""Report each sandbox's liveness to submission-service's judge-server registry, on the sandbox's behalf.
+"""Ping every sandbox, keep sandbox_health current, and report each answer to submission-service's judge-server
+registry on the sandbox's behalf.
 
-The sandboxes run untrusted code, so they sit on an internal network with no route to
-submission-service. The worker reaches both: it asks each sandbox for its /ping (the same server_info
-QingdaoU's own heartbeat sends) and forwards it as that sandbox's heartbeat. A sandbox that stops
-answering simply stops being reported, and the registry marks it offline after its 30 s window.
+The sandboxes run untrusted code, so they sit on an internal network with no route to submission-service. The worker
+reaches both: it asks each sandbox for its /ping (the same server_info QingdaoU's own heartbeat sends), marks the
+sandbox up or down in sandbox_health (dispatch tries the healthy ones first; oj_sandbox_up reads the same marks), and
+forwards the answer as that sandbox's heartbeat when SANDBOX_HEARTBEAT_URL is set. A sandbox that stops answering is
+marked down at once and simply stops being reported; the registry marks it offline after its 30 s window.
 """
 import logging
 import threading
@@ -11,6 +13,7 @@ import time
 
 import requests
 
+import sandbox_health
 from dispatcher import token_header
 
 log = logging.getLogger("judge-worker")
@@ -22,17 +25,25 @@ def report_once(urls, token, heartbeat_url, timeout=3):
         try:
             pong = requests.post(f"{url}/ping", json={}, headers={"X-Judge-Server-Token": digest}, timeout=timeout)
             pong.raise_for_status()
-            info = pong.json()["data"]
-            info.update(action="heartbeat", service_url=url)
+            info = dict(pong.json()["data"])
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            sandbox_health.mark(url, False)
+            log.warning("sandbox %s: no answer to /ping (%s)", url, exc)
+            continue
+        sandbox_health.mark(url, True)
+        if not heartbeat_url:
+            continue
+        info.update(action="heartbeat", service_url=url)
+        try:
             requests.post(heartbeat_url, json=info, headers={"X-JUDGE-SERVER-TOKEN": digest},
                           timeout=timeout).raise_for_status()
-        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        except requests.RequestException as exc:
             log.warning("sandbox %s: status not reported (%s)", url, exc)
 
 
 def start(config):
-    """Report every SANDBOX_HEARTBEAT_INTERVAL_SECONDS on a daemon thread; None when no URL is configured."""
-    if not config.SANDBOX_HEARTBEAT_URL:
+    """Ping every SANDBOX_HEARTBEAT_INTERVAL_SECONDS on a daemon thread; None when no sandbox is configured."""
+    if not config.JUDGE_SERVER_URLS:
         return None
 
     def loop():

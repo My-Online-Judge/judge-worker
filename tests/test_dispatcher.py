@@ -140,3 +140,70 @@ def test_dispatch_round_robin_rotates_start(mock_call):
 def test_dispatch_empty_urls_raises():
     with pytest.raises(ValueError):
         dispatcher.dispatch_judge([], "t", {}, timeout=5)
+
+
+# --- sub-project 6: healthy sandboxes first, dispatch counts ---
+
+from prometheus_client import REGISTRY  # noqa: E402
+
+import sandbox_health  # noqa: E402
+
+A, B = "http://a:8080", "http://b:8080"
+
+
+def dispatches(sandbox, outcome):
+    return REGISTRY.get_sample_value("oj_judge_dispatch_total", {"sandbox": sandbox, "outcome": outcome}) or 0
+
+
+@patch("dispatcher.call_judge_server")
+def test_a_sandbox_that_cannot_be_reached_is_marked_down(mock_call):
+    dispatcher.reset_round_robin()
+    mock_call.side_effect = [requests.ConnectionError("refused"), {"err": None, "data": []}]
+    dispatcher.dispatch_judge([A, B], "t", {}, timeout=5)
+    assert sandbox_health.order([A, B]) == [B, A]
+
+
+@patch("dispatcher.call_judge_server")
+def test_after_a_sandbox_is_marked_down_no_dispatch_goes_to_it(mock_call):
+    # E4 c3: the round-robin start landed on the dead sandbox for every other submission.
+    dispatcher.reset_round_robin()
+    sandbox_health.mark(A, False)
+    mock_call.return_value = {"err": None, "data": []}
+    for _ in range(4):
+        dispatcher.dispatch_judge([A, B], "t", {}, timeout=5)
+    assert [c.args[0] for c in mock_call.call_args_list] == [B] * 4
+
+
+@patch("dispatcher.call_judge_server")
+def test_when_every_sandbox_is_marked_down_they_are_still_tried(mock_call):
+    dispatcher.reset_round_robin()
+    sandbox_health.mark(A, False)
+    sandbox_health.mark(B, False)
+    mock_call.return_value = {"err": None, "data": []}
+    assert dispatcher.dispatch_judge([A, B], "t", {}, timeout=5) == {"err": None, "data": []}
+    assert mock_call.call_args.args[0] == A
+    assert sandbox_health.order([B, A]) == [A, B]   # A judged it, so A is healthy again
+
+
+@patch("dispatcher.call_judge_server")
+def test_a_4xx_or_a_read_timeout_does_not_mark_the_sandbox_down(mock_call):
+    # Both mean the sandbox answered: it is alive.
+    dispatcher.reset_round_robin()
+    mock_call.side_effect = [_http_error(400)]
+    with pytest.raises(requests.HTTPError):
+        dispatcher.dispatch_judge([A, B], "t", {}, timeout=5)
+    dispatcher.reset_round_robin()
+    mock_call.side_effect = [requests.ReadTimeout("still judging")]
+    with pytest.raises(requests.ReadTimeout):
+        dispatcher.dispatch_judge([A, B], "t", {}, timeout=5)
+    assert sandbox_health.order([A, B]) == [A, B]
+
+
+@patch("dispatcher.call_judge_server")
+def test_dispatches_are_counted_by_sandbox_and_outcome(mock_call):
+    dispatcher.reset_round_robin()
+    mock_call.side_effect = [requests.ConnectionError("refused"), {"err": None, "data": []}]
+    ok_b, failed_a = dispatches("b", "ok"), dispatches("a", "failed")
+    dispatcher.dispatch_judge([A, B], "t", {}, timeout=5)
+    assert dispatches("b", "ok") == ok_b + 1
+    assert dispatches("a", "failed") == failed_a + 1

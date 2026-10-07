@@ -3,10 +3,16 @@ import itertools
 import logging
 
 import requests
+from prometheus_client import Counter
+
+import sandbox_health
 
 log = logging.getLogger("judge-worker")
 
 _JUDGE_BODY_FIELDS = ("src", "language_config", "max_cpu_time", "max_memory", "test_case_id")
+
+# Judge requests sent to each sandbox, by outcome. E4's c3 criterion counts the failed ones (sub-project 6 §3.2 C).
+DISPATCHES = Counter("oj_judge_dispatch", "Judge requests sent to a sandbox, by outcome", ["sandbox", "outcome"])
 
 # Rotating counter for round-robin start selection across configured judge-servers.
 _round_robin = itertools.count()
@@ -56,20 +62,27 @@ def _is_retryable(exc):
 
 
 def dispatch_judge(urls, token, body, timeout=30):
-    """Send the judge request to one of `urls`, starting from a round-robin offset and failing
-    over to the next candidate on a retryable error. Raises the last error if every candidate
-    fails (or ValueError if no URLs are configured)."""
+    """Send the judge request to one of `urls`: the healthy sandboxes first, each list in round-robin order, failing
+    over to the next candidate on a retryable error. A retryable error marks that sandbox down and a success marks it
+    up (sandbox_health). Raises the last error if every candidate fails (or ValueError if no URLs are configured)."""
     if not urls:
         raise ValueError("no judge-server URLs configured")
     start = next(_round_robin) % len(urls)
-    ordered = urls[start:] + urls[:start]
+    ordered = sandbox_health.order(urls[start:] + urls[:start])
     last_exc = None
     for url in ordered:
+        label = sandbox_health.sandbox_label(url)
         try:
-            return call_judge_server(url, token, body, timeout=timeout)
+            result = call_judge_server(url, token, body, timeout=timeout)
         except requests.RequestException as exc:
+            DISPATCHES.labels(sandbox=label, outcome="failed").inc()
             if not _is_retryable(exc):
                 raise
+            sandbox_health.mark(url, False)
             last_exc = exc
             log.warning("judge-server %s failed (%s), trying next", url, exc)
+            continue
+        DISPATCHES.labels(sandbox=label, outcome="ok").inc()
+        sandbox_health.mark(url, True)
+        return result
     raise last_exc

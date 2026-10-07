@@ -6,3 +6,4 @@ opentelemetry-api==1.45.0
 opentelemetry-sdk==1.45.0
 opentelemetry-exporter-otlp-proto-http==1.45.0
 opentelemetry-instrumentation-requests==0.66b0
+prometheus-client==0.21.1
