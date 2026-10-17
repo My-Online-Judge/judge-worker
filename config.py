@@ -25,6 +25,8 @@ class Config:
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
+    # How long one verdict publish waits for Kafka's acknowledgement before it is sent again (sub-project 7 §3.2).
+    PUBLISH_TIMEOUT_SECONDS = _int_env("PUBLISH_TIMEOUT_SECONDS", 10)
     # submission-service's judge-server registry. The sandboxes cannot reach it (internal network), so
     # the worker relays each one's /ping there. Empty = no relay.
     SANDBOX_HEARTBEAT_URL = os.getenv("SANDBOX_HEARTBEAT_URL", "")
