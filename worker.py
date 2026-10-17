@@ -2,7 +2,7 @@ import json
 import logging
 import time
 
-from kafka.errors import KafkaError
+from kafka.errors import KafkaError, NoBrokersAvailable
 from opentelemetry.trace import SpanKind
 from prometheus_client import Counter
 
@@ -24,6 +24,17 @@ def backoff_delays():
     while True:
         yield delay
         delay = min(delay * 2, BACKOFF_MAX_SECONDS)
+
+
+def connect(build, config, sleep=time.sleep):
+    """build(config), retried while no broker answers — Kafka still starting, or away when Docker restarted us —
+    instead of exiting into Docker's restart back-off (sub-project 7 §3.2)."""
+    for delay in backoff_delays():
+        try:
+            return build(config)
+        except NoBrokersAvailable:
+            log.warning("No Kafka broker answers; trying again in %d s", delay)
+            sleep(delay)
 
 
 def safe_json_deserialize(b):

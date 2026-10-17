@@ -2,7 +2,7 @@ import itertools
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
-from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError
+from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError, NoBrokersAvailable
 from prometheus_client import REGISTRY
 
 import verdict
@@ -183,3 +183,11 @@ def test_a_failed_commit_does_not_stop_the_worker():
         worker.run(cfg, consumer, manager.producer)
     assert manager.producer.send.call_count == 2
     assert consumer.commit.call_count == 2
+
+
+def test_connect_waits_for_a_broker_instead_of_exiting():
+    build = MagicMock(side_effect=[NoBrokersAvailable(), NoBrokersAvailable(), "consumer"])
+    slept = []
+    assert worker.connect(build, "cfg", sleep=slept.append) == "consumer"
+    assert slept == [1, 2]
+    build.assert_called_with("cfg")

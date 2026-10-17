@@ -8,7 +8,7 @@ import sandbox_status
 import tracing
 from config import Config
 from log_context import SubmissionIdFilter
-from worker import run, safe_json_deserialize
+from worker import connect, run, safe_json_deserialize
 
 _handler = logging.StreamHandler()
 _handler.addFilter(SubmissionIdFilter())
@@ -42,10 +42,14 @@ def build_producer(config):
     )
 
 
-if __name__ == "__main__":
+def main():
     cfg = Config
     logging.info("judge-worker starting, brokers=%s, tracing=%s",
                  cfg.KAFKA_BROKERS, tracing.init_tracing())
-    metrics.start(cfg)
+    metrics.start(cfg)  # before Kafka: /metrics answers while the worker waits for a broker
     sandbox_status.start(cfg)
-    run(cfg, build_consumer(cfg), build_producer(cfg))
+    run(cfg, connect(build_consumer, cfg), connect(build_producer, cfg))
+
+
+if __name__ == "__main__":
+    main()

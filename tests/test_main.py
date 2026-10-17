@@ -2,6 +2,8 @@ import importlib
 import sys
 from unittest.mock import MagicMock
 
+import worker  # noqa: F401  (loads kafka.errors before a test replaces the kafka package with a stub)
+
 
 def test_build_consumer_applies_poll_tuning(monkeypatch):
     for v in ("JUDGE_TIMEOUT_SECONDS", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
@@ -27,3 +29,20 @@ def test_build_consumer_applies_poll_tuning(monkeypatch):
     assert kwargs["heartbeat_interval_ms"] == config.Config.HEARTBEAT_INTERVAL_MS
     # commit stays manual (after publish) — must not regress to auto-commit
     assert kwargs["enable_auto_commit"] is False
+
+
+def test_main_builds_the_kafka_clients_through_connect(monkeypatch):
+    monkeypatch.setitem(sys.modules, "kafka", MagicMock())
+    monkeypatch.delitem(sys.modules, "main", raising=False)
+    import main
+    for name in ("metrics", "sandbox_status", "tracing"):
+        monkeypatch.setattr(main, name, MagicMock())
+    connect = MagicMock(side_effect=lambda build, cfg: f"built by {build.__name__}")
+    run = MagicMock()
+    monkeypatch.setattr(main, "connect", connect)
+    monkeypatch.setattr(main, "run", run)
+
+    main.main()
+
+    assert [c.args[0] for c in connect.call_args_list] == [main.build_consumer, main.build_producer]
+    run.assert_called_once_with(main.Config, "built by build_consumer", "built by build_producer")
