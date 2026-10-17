@@ -2,7 +2,7 @@ import json
 import logging
 import time
 
-from kafka.errors import KafkaError, NoBrokersAvailable
+from kafka.errors import BrokerResponseError, KafkaError, NoBrokersAvailable
 from opentelemetry.trace import SpanKind
 from prometheus_client import Counter
 
@@ -48,8 +48,11 @@ def safe_json_deserialize(b):
 
 def publish_until_sent(producer, config, submission_id, judged, headers, wait):
     """Send the verdict until Kafka acknowledges it. A KafkaError — Kafka away, no metadata, no acknowledgement in
-    time — is logged, counted, and the same verdict sent again after wait(seconds). Anything else is a bug: it
-    propagates."""
+    time — is logged, counted, and the same verdict sent again after wait(seconds). A record the broker refuses for
+    good (a non-retriable broker answer, e.g. MessageSizeTooLargeError: the verdict carries the program's whole
+    output) is replaced once by a SYSTEM_ERROR without details, as when judging itself fails; if that is refused too,
+    it propagates. Anything else is a bug: it propagates."""
+    replaced = False
     for delay in backoff_delays():
         try:
             producer.send(config.JUDGED_TOPIC, key=submission_id, value=judged, headers=headers) \
@@ -57,6 +60,13 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait):
             return
         except KafkaError as exc:
             PUBLISH_RETRIES.inc()
+            if isinstance(exc, BrokerResponseError) and not exc.retriable:
+                if replaced:
+                    raise
+                log.error("Kafka refused the verdict of submission %s for good (%r); sending a SYSTEM_ERROR instead",
+                          submission_id, exc)
+                judged, replaced = system_error_event(submission_id, f"verdict not publishable: {exc!r}"), True
+                continue
             log.warning("Verdict of submission %s not published (%r); sending it again in %d s",
                         submission_id, exc, delay)
             wait(delay)
@@ -91,10 +101,13 @@ def run(config, consumer, producer):
     def wait(seconds):
         # Kafka is away: poll() keeps this consumer in its group (it is how the group sees we are alive) while every
         # partition is paused, so no next submission is fetched. kafka-python 2.0.2 may block in poll() until the
-        # coordinator is back, or raise; either way the verdict is sent again afterwards.
+        # coordinator is back (in a full outage the first wait lasts the whole outage), or raise; either way the
+        # verdict is sent again afterwards. A rebalance completing inside poll() un-pauses every partition and the poll
+        # may then fetch a record and advance its position: rewind it, so the next commit does not skip it.
         consumer.pause(*consumer.assignment())
         try:
-            consumer.poll(timeout_ms=int(seconds * 1000))
+            for tp, records in consumer.poll(timeout_ms=int(seconds * 1000)).items():
+                consumer.seek(tp, records[0].offset)
         except KafkaError as exc:
             log.warning("poll() while waiting for Kafka failed (%r)", exc)
             time.sleep(seconds)

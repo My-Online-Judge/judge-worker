@@ -2,7 +2,9 @@ import itertools
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
-from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError, NoBrokersAvailable
+from kafka.errors import (CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError,
+                          NoBrokersAvailable)
+from kafka.structs import TopicPartition
 from prometheus_client import REGISTRY
 
 import verdict
@@ -191,3 +193,42 @@ def test_connect_waits_for_a_broker_instead_of_exiting():
     assert worker.connect(build, "cfg", sleep=slept.append) == "consumer"
     assert slept == [1, 2]
     build.assert_called_with("cfg")
+
+
+def test_a_record_the_wait_s_poll_fetches_is_rewound_not_dropped():
+    # kafka-python 2.0.2 drops the paused flag when a rebalance completes inside poll(), which may then fetch a record
+    # of another partition and advance its position: the wait must rewind it, or the next commit skips a submission.
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s12"})]
+    tp = TopicPartition("submission.requested", 3)
+    consumer.poll.return_value = {tp: [MagicMock(offset=41)]}
+    producer.send.return_value.get.side_effect = [KafkaTimeoutError(), None]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    with patch("worker.process_event", return_value={"submissionId": "s12", "status": 0}):
+        worker.run(cfg, consumer, producer)
+    consumer.seek.assert_called_once_with(tp, 41)
+    names = [c[0] for c in manager.mock_calls]
+    assert names.index("consumer.seek") < names.index("consumer.commit")
+
+
+def test_a_verdict_kafka_refuses_for_good_is_replaced_by_a_system_error():
+    # MessageSizeTooLargeError: the verdict carries the program's whole output; Kafka will never take it.
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = [MessageSizeTooLargeError(), None]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    waits = []
+    with patch("worker.process_event", return_value={"submissionId": "s13", "status": 0, "details": ["x" * 10]}):
+        worker.handle_one({"submissionId": "s13"}, cfg, producer, wait=waits.append)
+    sent = producer.send.call_args_list[-1].kwargs["value"]
+    assert sent["submissionId"] == "s13" and sent["status"] == verdict.SYSTEM_ERROR and sent["details"] == []
+    assert waits == []
+
+
+def test_a_system_error_kafka_also_refuses_is_raised_not_looped():
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = [MessageSizeTooLargeError(), MessageSizeTooLargeError()]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    with patch("worker.process_event", return_value={"submissionId": "s14", "status": 0}):
+        with pytest.raises(MessageSizeTooLargeError):
+            worker.handle_one({"submissionId": "s14"}, cfg, producer, wait=lambda s: None)
