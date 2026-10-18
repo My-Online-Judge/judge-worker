@@ -14,6 +14,9 @@ log = logging.getLogger("judge-worker")
 # Sub-project 7 §3.2: a verdict Kafka did not take is sent again until it does — never dropped, never judged again,
 # and never a reason to exit (an exit cost a Docker restart back-off and a consumer-group rebalance).
 PUBLISH_RETRIES = Counter("oj_verdict_publish_retries", "Verdict publishes that failed and were sent again")
+# How long verdicts waited for Kafka (follow-up 16): in a full outage the first wait lasts until Kafka is back, so the
+# retry count reads 1-2 per outage while this counts its length.
+PUBLISH_WAIT_SECONDS = Counter("oj_verdict_publish_wait_seconds", "Seconds spent waiting to send a verdict again")
 BACKOFF_START_SECONDS = 1
 BACKOFF_MAX_SECONDS = 10
 
@@ -69,7 +72,9 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait):
                 continue
             log.warning("Verdict of submission %s not published (%r); sending it again in %d s",
                         submission_id, exc, delay)
+            started = time.monotonic()
             wait(delay)
+            PUBLISH_WAIT_SECONDS.inc(time.monotonic() - started)
 
 
 def handle_one(event, config, producer, headers=None, wait=time.sleep):

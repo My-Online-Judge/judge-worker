@@ -232,3 +232,16 @@ def test_a_system_error_kafka_also_refuses_is_raised_not_looped():
     with patch("worker.process_event", return_value={"submissionId": "s14", "status": 0}):
         with pytest.raises(MessageSizeTooLargeError):
             worker.handle_one({"submissionId": "s14"}, cfg, producer, wait=lambda s: None)
+
+
+def test_the_seconds_spent_waiting_to_resend_are_counted():
+    # oj_verdict_publish_retries_total reads 1-2 per outage (the first wait lasts the whole outage): the wait time is
+    # what says how long verdicts waited for Kafka (follow-up 16).
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = [KafkaTimeoutError(), None]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    before = REGISTRY.get_sample_value("oj_verdict_publish_wait_seconds_total") or 0
+    with patch("worker.process_event", return_value={"submissionId": "s15", "status": 0}), \
+            patch("worker.time.monotonic", side_effect=[100.0, 107.5]):
+        worker.handle_one({"submissionId": "s15"}, cfg, producer, wait=lambda s: None)
+    assert (REGISTRY.get_sample_value("oj_verdict_publish_wait_seconds_total") or 0) - before == 7.5
