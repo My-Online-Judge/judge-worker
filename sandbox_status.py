@@ -31,7 +31,9 @@ def report_once(urls, token, heartbeat_url, timeout=3, *, tls_kwargs=None):
                                  **tls_kwargs)
             pong.raise_for_status()
             info = dict(pong.json()["data"])
-        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        # OSError: requests' RequestException is one, and so is what requests raises for a certificate file that is gone
+        # (no request sent). Either way this sandbox is unreachable: marked down, and the round goes on to the next.
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             sandbox_health.mark(url, False)
             log.warning("sandbox %s: no answer to /ping (%s)", url, exc)
             continue

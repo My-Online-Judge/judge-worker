@@ -82,6 +82,18 @@ def test_ping_passes_tls_kwargs(mock_post, tls_dir):
     assert ping.kwargs["verify"] == _tls_kwargs(tls_dir)["verify"]
 
 
+def test_a_vanished_certificate_marks_every_sandbox_down(tls_dir):
+    urls = ["https://judge-server:8080", "https://judge-server-2:8080"]
+    for url in urls:
+        sandbox_health.mark(url, True)
+    settings = tls.requests_kwargs()  # read once at start...
+    (tls_dir / "tls.key").unlink()    # ...then the file goes: requests raises a plain OSError before connecting
+
+    sandbox_status.report_once(urls, "t", HEARTBEAT_URL, tls_kwargs=settings)  # no exception, every sandbox tried
+
+    assert up("judge-server") == 0 and up("judge-server-2") == 0  # SandboxDown can fire; the marks do not freeze
+
+
 @patch("sandbox_status.requests.post")
 def test_a_dead_sandbox_is_skipped_and_the_others_still_reported(mock_post):
     mock_post.side_effect = [requests.ConnectionError("down"), _pong("judge-server-2"), _ok()]
