@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 from kafka.errors import BrokerResponseError, KafkaError, NoBrokersAvailable
 from opentelemetry.trace import SpanKind
@@ -77,6 +78,21 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait):
             PUBLISH_WAIT_SECONDS.inc(time.monotonic() - started)
 
 
+def started_at_now():
+    """The current UTC instant, ISO-8601 with milliseconds and a Z suffix (submission-service localizes it)."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def publish_started(producer, config, submission_id):
+    """Tell submission-service judging begins now. Advisory: not awaited, and a KafkaError is only logged."""
+    try:
+        producer.send(config.STARTED_TOPIC, key=submission_id,
+                      value={"submissionId": submission_id, "worker": config.WORKER_ID,
+                             "startedAt": started_at_now()})
+    except KafkaError as exc:
+        log.warning("Start of submission %s not announced (%r)", submission_id, exc)
+
+
 def handle_one(event, config, producer, headers=None, wait=time.sleep):
     if event is None:
         log.error("Skipping malformed (non-JSON) message")
@@ -93,7 +109,8 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep):
             kind=SpanKind.CONSUMER,
             attributes={"oj.submission_id": submission_id}) as span:
         try:
-            judged = process_event(event, config)
+            judged = process_event(
+                event, config, on_started=lambda: publish_started(producer, config, submission_id))
         except Exception as exc:  # judge-server down / timeout / bad response
             log.exception("Judging failed for submission %s", submission_id)
             judged = system_error_event(submission_id, str(exc))

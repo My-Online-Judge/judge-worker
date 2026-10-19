@@ -1,4 +1,5 @@
 import os
+import socket
 
 DEFAULT_JUDGE_TIMEOUT_SECONDS = 30
 
@@ -31,6 +32,9 @@ class Config:
     JUDGE_SERVER_TOKEN = os.getenv("JUDGE_SERVER_TOKEN", "")
     REQUESTED_TOPIC = os.getenv("REQUESTED_TOPIC", "submission.requested")
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
+    # Announced just before each dispatch (sub-project 11): submission-service starts its judging-timeout clock then.
+    STARTED_TOPIC = os.getenv("STARTED_TOPIC", "submission.started")
+    WORKER_ID = os.getenv("WORKER_ID", socket.gethostname())
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
     # How long one verdict publish waits for Kafka's acknowledgement before it is sent again (sub-project 7 §3.2).

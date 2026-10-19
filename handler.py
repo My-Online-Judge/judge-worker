@@ -48,12 +48,14 @@ def system_error_event(submission_id, message):
     return _event(submission_id, verdict.SYSTEM_ERROR, None, 0, 0, 0, message, [])
 
 
-def process_event(event, config):
+def process_event(event, config, on_started=None):
     token = submission_id_var.set(str(event.get("submissionId", "-")))
     try:
         log.info("Judging submission %s", event.get("submissionId", "-"))
         maybe_sweep()  # rate-limited; prunes stale cached bundles
         ensure_present(event["test_case_id"])
+        if on_started is not None:
+            on_started()
         body = build_judge_body(event)
         judge_response = dispatch_judge(
             config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body,

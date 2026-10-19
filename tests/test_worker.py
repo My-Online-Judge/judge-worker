@@ -182,7 +182,7 @@ def test_a_failed_commit_does_not_stop_the_worker():
     consumer.__iter__.return_value = [Msg({"submissionId": "s8"}), Msg({"submissionId": "s9"})]
     consumer.commit.side_effect = [CommitFailedError(), None]
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
-    with patch("worker.process_event", side_effect=lambda e, c: {"submissionId": e["submissionId"], "status": 0}):
+    with patch("worker.process_event", side_effect=lambda e, c, **kw: {"submissionId": e["submissionId"], "status": 0}):
         worker.run(cfg, consumer, manager.producer)
     assert manager.producer.send.call_count == 2
     assert consumer.commit.call_count == 2
@@ -262,3 +262,50 @@ def test_the_seconds_spent_waiting_to_resend_are_counted():
             patch("worker.time.monotonic", side_effect=[100.0, 107.5]):
         worker.handle_one({"submissionId": "s15"}, cfg, producer, wait=lambda s: None)
     assert (REGISTRY.get_sample_value("oj_verdict_publish_wait_seconds_total") or 0) - before == 7.5
+
+
+def test_started_event_shape():
+    import re
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
+                    PUBLISH_TIMEOUT_SECONDS=10)
+
+    def fake_process(event, config, on_started=None):
+        on_started()
+        return {"submissionId": "s20", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s20"}, cfg, producer)
+
+    started = [c for c in producer.send.call_args_list if c.args[0] == "submission.started"]
+    assert len(started) == 1
+    assert started[0].kwargs["key"] == "s20"
+    value = started[0].kwargs["value"]
+    assert set(value) == {"submissionId", "worker", "startedAt"}
+    assert value["submissionId"] == "s20" and value["worker"] == "w1"
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", value["startedAt"])
+    # advisory: the start's future is never waited on (only the verdict's is)
+    producer.send.return_value.get.assert_called_once_with(timeout=10)
+
+
+def test_a_failed_start_publish_does_not_stop_judging():
+    producer = MagicMock()
+
+    def send(topic, **kw):
+        if topic == "submission.started":
+            raise KafkaTimeoutError()
+        return MagicMock()
+
+    producer.send.side_effect = send
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
+                    PUBLISH_TIMEOUT_SECONDS=10)
+
+    def fake_process(event, config, on_started=None):
+        on_started()
+        return {"submissionId": "s21", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s21"}, cfg, producer)
+
+    judged = [c for c in producer.send.call_args_list if c.args[0] == "submission.judged"]
+    assert len(judged) == 1
