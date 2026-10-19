@@ -5,6 +5,7 @@ from kafka import KafkaConsumer, KafkaProducer
 
 import metrics
 import sandbox_status
+import tls
 import tracing
 from config import Config
 from log_context import SubmissionIdFilter
@@ -31,6 +32,7 @@ def build_consumer(config):
         max_poll_interval_ms=config.MAX_POLL_INTERVAL_MS,
         session_timeout_ms=config.SESSION_TIMEOUT_MS,
         heartbeat_interval_ms=config.HEARTBEAT_INTERVAL_MS,
+        **tls.kafka_kwargs(),
     )
 
 
@@ -39,6 +41,7 @@ def build_producer(config):
         bootstrap_servers=config.KAFKA_BROKERS.split(","),
         key_serializer=lambda k: k.encode("utf-8"),
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        **tls.kafka_kwargs(),
     )
 
 

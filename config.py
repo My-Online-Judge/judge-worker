@@ -15,6 +15,13 @@ def _int_env(name, default):
 
 
 class Config:
+    # Internal TLS (sub-project 10): the directory holding ca.crt, tls.crt and tls.key (compose mounts the tls volume's
+    # judge-worker subpath at /etc/oj/tls). Unset = plaintext, as in development and the unit tests.
+    OJ_TLS_DIR = os.getenv("OJ_TLS_DIR", "")
+    TLS_CA_FILE = os.path.join(OJ_TLS_DIR, "ca.crt") if OJ_TLS_DIR else ""
+    TLS_CERT_FILE = os.path.join(OJ_TLS_DIR, "tls.crt") if OJ_TLS_DIR else ""
+    TLS_KEY_FILE = os.path.join(OJ_TLS_DIR, "tls.key") if OJ_TLS_DIR else ""
+
     KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
     JUDGE_SERVER_URL = os.getenv("JUDGE_SERVER_URL", "http://localhost:8080")
     # Comma-separated list of judge-server base URLs; the dispatcher round-robins across them and

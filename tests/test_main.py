@@ -31,6 +31,47 @@ def test_build_consumer_applies_poll_tuning(monkeypatch):
     assert kwargs["enable_auto_commit"] is False
 
 
+def _main_with_stub_kafka(monkeypatch):
+    monkeypatch.setitem(sys.modules, "kafka", MagicMock())
+    monkeypatch.delitem(sys.modules, "main", raising=False)
+    import main
+    return main
+
+
+def _tls_kwargs(tls_dir):
+    return {"security_protocol": "SSL", "ssl_cafile": str(tls_dir / "ca.crt"),
+            "ssl_certfile": str(tls_dir / "tls.crt"), "ssl_keyfile": str(tls_dir / "tls.key"),
+            "ssl_check_hostname": True}
+
+
+def test_build_consumer_merges_tls_kwargs(monkeypatch, tls_dir):
+    import config
+    main = _main_with_stub_kafka(monkeypatch)
+
+    main.build_consumer(config.Config)
+
+    args, kwargs = main.KafkaConsumer.call_args
+    assert args == (config.Config.REQUESTED_TOPIC,)
+    assert {k: kwargs.get(k) for k in _tls_kwargs(tls_dir)} == _tls_kwargs(tls_dir)
+    # the consumer's own settings stay
+    assert kwargs["bootstrap_servers"] == config.Config.KAFKA_BROKERS.split(",")
+    assert kwargs["group_id"] == config.Config.CONSUMER_GROUP
+    assert kwargs["enable_auto_commit"] is False
+
+
+def test_build_producer_merges_tls_kwargs(monkeypatch, tls_dir):
+    import config
+    main = _main_with_stub_kafka(monkeypatch)
+
+    main.build_producer(config.Config)
+
+    kwargs = main.KafkaProducer.call_args.kwargs
+    assert {k: kwargs.get(k) for k in _tls_kwargs(tls_dir)} == _tls_kwargs(tls_dir)
+    assert kwargs["bootstrap_servers"] == config.Config.KAFKA_BROKERS.split(",")
+    assert kwargs["key_serializer"]("42") == b"42"
+    assert kwargs["value_serializer"]({"submissionId": 42}) == b'{"submissionId": 42}'
+
+
 def test_main_builds_the_kafka_clients_through_connect(monkeypatch):
     monkeypatch.setitem(sys.modules, "kafka", MagicMock())
     monkeypatch.delitem(sys.modules, "main", raising=False)

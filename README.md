@@ -10,6 +10,8 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 
 ## Env
 - KAFKA_BROKERS (default localhost:9092)
+- OJ_TLS_DIR (vd /etc/oj/tls) — thư mục chứa `ca.crt`, `tls.crt`, `tls.key`: Kafka qua TLS, trình chứng chỉ client,
+  kiểm tra hostname của broker; thiếu file thì worker dừng. Không đặt thì plaintext
 - JUDGE_SERVER_URL (default http://localhost:8080)
 - JUDGE_SERVER_TOKEN (default default_token)
 - REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS
