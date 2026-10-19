@@ -208,3 +208,11 @@ def test_default_client_uses_the_tls_pool(tls_dir, monkeypatch):
     # With TLS on, the client talks https and verifies MinIO against the CA (tls.minio_http_client).
     assert client._base_url.is_https
     assert client._http.connection_pool_kw["ca_certs"] == str(tls_dir / "ca.crt")
+
+
+def test_default_client_refuses_plaintext_endpoint_when_tls_is_on(tls_dir, monkeypatch):
+    monkeypatch.setattr(test_case_sync.Config, "MINIO_ENDPOINT", "http://minio:9000")
+
+    # With TLS on the worker never falls back to plaintext (tls.py): no client is built.
+    with pytest.raises(RuntimeError, match="MINIO_ENDPOINT"):
+        test_case_sync._default_client()

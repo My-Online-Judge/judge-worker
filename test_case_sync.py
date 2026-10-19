@@ -29,6 +29,9 @@ def _default_client():
 
     endpoint = Config.MINIO_ENDPOINT
     secure = endpoint.startswith("https://")
+    if tls.enabled() and not secure:
+        # Like tls.py: with TLS on the worker never falls back to plaintext.
+        raise RuntimeError("OJ_TLS_DIR is set but MINIO_ENDPOINT is not https://")
     host = endpoint.split("://", 1)[-1]
     # With TLS on (OJ_TLS_DIR), MinIO is verified against the private CA; None keeps minio-py's default pool.
     return Minio(host, access_key=Config.MINIO_ACCESS_KEY,
