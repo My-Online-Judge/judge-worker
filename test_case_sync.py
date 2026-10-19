@@ -6,6 +6,7 @@ import tempfile
 import time
 import zipfile
 
+import tls
 from config import Config
 
 log = logging.getLogger("judge-worker")
@@ -29,8 +30,9 @@ def _default_client():
     endpoint = Config.MINIO_ENDPOINT
     secure = endpoint.startswith("https://")
     host = endpoint.split("://", 1)[-1]
+    # With TLS on (OJ_TLS_DIR), MinIO is verified against the private CA; None keeps minio-py's default pool.
     return Minio(host, access_key=Config.MINIO_ACCESS_KEY,
-                 secret_key=Config.MINIO_SECRET_KEY, secure=secure)
+                 secret_key=Config.MINIO_SECRET_KEY, secure=secure, http_client=tls.minio_http_client())
 
 
 def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):

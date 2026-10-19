@@ -4,6 +4,8 @@ Config is read at call time (config.Config), so a reloaded config is seen.
 """
 import os
 
+import urllib3
+
 import config
 
 
@@ -49,3 +51,17 @@ def metrics_kwargs() -> dict:
         return {}
     ca, cert, key = paths()
     return {"certfile": cert, "keyfile": key, "client_cafile": ca, "client_auth_required": True}
+
+
+def minio_http_client() -> urllib3.PoolManager | None:
+    """urllib3 pool for minio-py: MinIO verified against the CA (and its host name), the worker's certificate presented
+    should MinIO ask for one. Otherwise minio-py's own pool: its timeouts, pool size and retries. None when TLS is off,
+    and minio-py builds its default pool."""
+    if not enabled():
+        return None
+    ca, cert, key = paths()
+    timeout = 5 * 60  # minio-py 7.2.7's default, connect and read
+    return urllib3.PoolManager(
+        cert_reqs="CERT_REQUIRED", ca_certs=ca, cert_file=cert, key_file=key,
+        timeout=urllib3.Timeout(connect=timeout, read=timeout), maxsize=10,
+        retries=urllib3.Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504]))

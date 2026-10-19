@@ -198,3 +198,13 @@ def test_sweep_cache_tolerates_concurrent_removal(tmp_path, monkeypatch):
     monkeypatch.setattr(os.path, "getmtime", flaky_getmtime)
     evicted = sweep_cache(str(tmp_path), ttl_seconds=86_400, now=now)
     assert evicted == ["slug__stale"]   # gone skipped without crashing, stale still evicted
+
+
+def test_default_client_uses_the_tls_pool(tls_dir, monkeypatch):
+    monkeypatch.setattr(test_case_sync.Config, "MINIO_ENDPOINT", "https://minio:9000")
+
+    client = test_case_sync._default_client()
+
+    # With TLS on, the client talks https and verifies MinIO against the CA (tls.minio_http_client).
+    assert client._base_url.is_https
+    assert client._http.connection_pool_kw["ca_certs"] == str(tls_dir / "ca.crt")
