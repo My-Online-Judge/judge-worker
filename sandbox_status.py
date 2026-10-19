@@ -14,6 +14,7 @@ import time
 import requests
 
 import sandbox_health
+import tls
 from dispatcher import token_header
 
 log = logging.getLogger("judge-worker")
@@ -35,8 +36,9 @@ def report_once(urls, token, heartbeat_url, timeout=3):
             continue
         info.update(action="heartbeat", service_url=url)
         try:
+            # Over mutual TLS with the worker's certificate: submission-service allow-lists the CN judge-worker.
             requests.post(heartbeat_url, json=info, headers={"X-JUDGE-SERVER-TOKEN": digest},
-                          timeout=timeout).raise_for_status()
+                          timeout=timeout, **tls.requests_kwargs()).raise_for_status()
         except requests.RequestException as exc:
             log.warning("sandbox %s: status not reported (%s)", url, exc)
 

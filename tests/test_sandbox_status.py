@@ -50,6 +50,19 @@ def test_relays_each_sandbox_ping_as_its_heartbeat(mock_post):
 
 
 @patch("sandbox_status.requests.post")
+def test_heartbeat_uses_tls_kwargs(mock_post, tls_dir):
+    mock_post.side_effect = [_pong("judge-server"), _ok()]
+
+    sandbox_status.report_once(["http://judge-server:8080"], "t",
+                               "https://submission-service:8000/api/judge_server_heartbeat/")
+
+    beat = mock_post.call_args_list[1]
+    # submission-service requires a client certificate (CN judge-worker is allow-listed) and is verified against the CA.
+    assert beat.kwargs["cert"] == (str(tls_dir / "tls.crt"), str(tls_dir / "tls.key"))
+    assert beat.kwargs["verify"] == str(tls_dir / "ca.crt")
+
+
+@patch("sandbox_status.requests.post")
 def test_a_dead_sandbox_is_skipped_and_the_others_still_reported(mock_post):
     mock_post.side_effect = [requests.ConnectionError("down"), _pong("judge-server-2"), _ok()]
 

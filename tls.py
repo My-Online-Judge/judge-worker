@@ -31,3 +31,21 @@ def kafka_kwargs() -> dict:
     ca, cert, key = paths()
     return {"security_protocol": "SSL", "ssl_cafile": ca, "ssl_certfile": cert, "ssl_keyfile": key,
             "ssl_check_hostname": True}
+
+
+def requests_kwargs() -> dict:
+    """requests settings for calls to the services (the heartbeat to submission-service): the worker's certificate
+    presented (the services require one), the service verified against the CA (requests also checks the host name)."""
+    if not enabled():
+        return {}
+    ca, cert, key = paths()
+    return {"cert": (cert, key), "verify": ca}
+
+
+def metrics_kwargs() -> dict:
+    """prometheus-client start_http_server settings: /metrics over TLS with the worker's certificate, and only clients
+    presenting a certificate signed by the CA (Prometheus) get an answer."""
+    if not enabled():
+        return {}
+    ca, cert, key = paths()
+    return {"certfile": cert, "keyfile": key, "client_cafile": ca, "client_auth_required": True}
