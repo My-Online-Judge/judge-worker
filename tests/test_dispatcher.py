@@ -48,6 +48,19 @@ def test_call_judge_server_posts_with_token_header(mock_post):
     assert kwargs["headers"]["X-Judge-Server-Token"] == hashlib.sha256(b"secret").hexdigest()
     assert kwargs["json"] == {"src": "x"}
     assert kwargs["timeout"] == 30
+    assert "cert" not in kwargs and "verify" not in kwargs  # TLS off: requests' defaults
+
+
+@patch("dispatcher.requests.post")
+def test_judge_call_passes_tls_kwargs(mock_post, tls_dir):
+    mock_post.return_value.json.return_value = {"err": None, "data": []}
+
+    dispatcher.call_judge_server("https://judge-server:8080", "secret", {"src": "x"}, timeout=30)
+
+    kwargs = mock_post.call_args.kwargs
+    # The sandbox requires the worker's certificate and is verified against the CA (requests checks the host name too).
+    assert kwargs["cert"] == (str(tls_dir / "tls.crt"), str(tls_dir / "tls.key"))
+    assert kwargs["verify"] == str(tls_dir / "ca.crt")
 
 
 # --- T1-3: multi judge-server dispatch (round-robin + failover) ---

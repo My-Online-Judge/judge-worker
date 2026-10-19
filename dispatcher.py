@@ -6,6 +6,7 @@ import requests
 from prometheus_client import Counter
 
 import sandbox_health
+import tls
 
 log = logging.getLogger("judge-worker")
 
@@ -35,6 +36,7 @@ def build_judge_body(event):
 
 
 def call_judge_server(base_url, token, body, timeout=30):
+    # Over mutual TLS with the worker's certificate: the sandbox's gunicorn requires one signed by the CA.
     resp = requests.post(
         f"{base_url}/judge",
         json=body,
@@ -43,6 +45,7 @@ def call_judge_server(base_url, token, body, timeout=30):
             "Content-Type": "application/json",
         },
         timeout=timeout,
+        **tls.requests_kwargs(),
     )
     resp.raise_for_status()
     return resp.json()

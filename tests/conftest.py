@@ -1,9 +1,14 @@
 import importlib
+import os
 
 import pytest
 
-import config
-import sandbox_health
+# The worker refuses to start without its judge-server token (Config.validate); config reads it at import, so every test
+# has one unless it removes it.
+os.environ.setdefault("JUDGE_SERVER_TOKEN", "test-token")
+
+import config  # noqa: E402
+import sandbox_health  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

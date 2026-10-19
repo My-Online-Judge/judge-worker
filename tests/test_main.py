@@ -2,6 +2,8 @@ import importlib
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 import worker  # noqa: F401  (loads kafka.errors before a test replaces the kafka package with a stub)
 
 
@@ -87,3 +89,17 @@ def test_main_builds_the_kafka_clients_through_connect(monkeypatch):
 
     assert [c.args[0] for c in connect.call_args_list] == [main.build_consumer, main.build_producer]
     run.assert_called_once_with(main.Config, "built by build_consumer", "built by build_producer")
+
+
+def test_main_validates_the_config_before_starting_anything(monkeypatch):
+    main = _main_with_stub_kafka(monkeypatch)
+    for name in ("metrics", "sandbox_status", "tracing", "connect", "run"):
+        monkeypatch.setattr(main, name, MagicMock())
+    monkeypatch.setattr(main.Config, "JUDGE_SERVER_TOKEN", "")
+
+    with pytest.raises(SystemExit, match="missing required env: JUDGE_SERVER_TOKEN"):
+        main.main()
+
+    main.tracing.init_tracing.assert_not_called()
+    main.metrics.start.assert_not_called()
+    main.connect.assert_not_called()

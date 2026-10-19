@@ -27,7 +27,8 @@ class Config:
     # Comma-separated list of judge-server base URLs; the dispatcher round-robins across them and
     # fails over to the next on connection error / 5xx. A single URL is the common case.
     JUDGE_SERVER_URLS = [u.strip() for u in JUDGE_SERVER_URL.split(",") if u.strip()]
-    JUDGE_SERVER_TOKEN = os.getenv("JUDGE_SERVER_TOKEN", "default_token")
+    # The sandboxes' shared secret (its sha256 goes in X-Judge-Server-Token). No default: validate() stops the worker.
+    JUDGE_SERVER_TOKEN = os.getenv("JUDGE_SERVER_TOKEN", "")
     REQUESTED_TOPIC = os.getenv("REQUESTED_TOPIC", "submission.requested")
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
@@ -68,3 +69,9 @@ class Config:
     TEST_CASE_CACHE_TTL_SECONDS = int(os.getenv("TEST_CASE_CACHE_TTL_SECONDS", "86400"))
     # ...checked at most this often (rate-limited via a `.last_sweep` marker file).
     TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS = int(os.getenv("TEST_CASE_CACHE_SWEEP_INTERVAL_SECONDS", "3600"))
+
+    @classmethod
+    def validate(cls) -> None:
+        """Refuse to start without the settings that have no safe default."""
+        if not cls.JUDGE_SERVER_TOKEN:
+            raise SystemExit("missing required env: JUDGE_SERVER_TOKEN")

@@ -86,3 +86,22 @@ def test_a_silent_client_is_dropped_after_the_handshake_timeout(tls_dir, monkeyp
     with socket.create_connection(("127.0.0.1", port)) as silent:
         silent.settimeout(3)
         assert silent.recv(1) == b""  # the server hung up: a silent client holds a thread for the timeout, no longer
+
+
+def test_a_client_silent_after_the_handshake_is_dropped_without_a_traceback(tls_dir, monkeypatch, capfd):
+    monkeypatch.setattr(metrics, "TLS_HANDSHAKE_TIMEOUT_SECONDS", 0.5, raising=False)
+    port = start_tls_metrics(tls_dir)
+    probe = ssl.create_default_context(cafile=FIXTURES / "ca.crt")
+    probe.load_cert_chain(FIXTURES / "tls-probe.crt", FIXTURES / "tls-probe.key")
+
+    # The handshake completes with an accepted certificate, then no request comes: the server times out reading it.
+    with probe.wrap_socket(socket.create_connection(("127.0.0.1", port)), server_hostname="localhost") as client:
+        client.settimeout(3)
+        try:
+            assert client.recv(1) == b""  # the server hung up after the timeout
+        except (ssl.SSLError, ConnectionResetError):
+            pass  # ...without close_notify, or with a reset: hung up all the same
+
+    # Dropped like a failed handshake: socketserver's handle_error would have printed a traceback by now (it runs
+    # before the connection is closed).
+    assert capfd.readouterr().err == ""

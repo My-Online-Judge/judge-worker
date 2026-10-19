@@ -47,6 +47,7 @@ def build_producer(config):
 
 def main():
     cfg = Config
+    cfg.validate()
     logging.info("judge-worker starting, brokers=%s, tracing=%s",
                  cfg.KAFKA_BROKERS, tracing.init_tracing())
     metrics.start(cfg)  # before Kafka: /metrics answers while the worker waits for a broker

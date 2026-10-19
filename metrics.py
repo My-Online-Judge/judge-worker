@@ -30,11 +30,15 @@ class _TlsServer(ThreadingWSGIServer):
         return self.ssl_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=False), address
 
     def finish_request(self, request, client_address):
+        # An OSError here is the client's: no or a refused certificate, not TLS at all, silent past the timeout (in the
+        # handshake or after it, before sending a request), or gone mid-request. The connection is closed
+        # (shutdown_request) with no log, as the old in-accept handshake failure was; socketserver would print a
+        # traceback.
         try:
             request.do_handshake()
-        except OSError:  # no or a refused client certificate, not TLS at all, or silent past the timeout
-            return  # the connection is closed (shutdown_request), as the old in-accept handshake failure was: no log
-        super().finish_request(request, client_address)
+            super().finish_request(request, client_address)
+        except OSError:
+            pass
 
 
 class _QuietHandler(WSGIRequestHandler):

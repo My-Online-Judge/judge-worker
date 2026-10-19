@@ -1,5 +1,7 @@
 import importlib
 
+import pytest
+
 
 def test_config_reads_env(monkeypatch):
     monkeypatch.setenv("KAFKA_BROKERS", "broker:9092")
@@ -96,3 +98,21 @@ def test_metrics_port_defaults_to_9100(monkeypatch):
     import config
     importlib.reload(config)
     assert config.Config.METRICS_PORT == 9100
+
+
+def test_validate_requires_token(monkeypatch):
+    # No default token: a worker started without JUDGE_SERVER_TOKEN (or with an empty one) refuses to start.
+    import config
+    try:
+        for unset in (lambda: monkeypatch.delenv("JUDGE_SERVER_TOKEN", raising=False),
+                      lambda: monkeypatch.setenv("JUDGE_SERVER_TOKEN", "")):
+            unset()
+            importlib.reload(config)
+            with pytest.raises(SystemExit, match="^missing required env: JUDGE_SERVER_TOKEN$"):
+                config.Config.validate()
+        monkeypatch.setenv("JUDGE_SERVER_TOKEN", "secret")
+        importlib.reload(config)
+        assert config.Config.validate() is None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)  # later tests get the session's token back
