@@ -23,5 +23,5 @@ def tls_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("OJ_TLS_DIR", str(tmp_path))
     importlib.reload(config)
     yield tmp_path
-    monkeypatch.delenv("OJ_TLS_DIR")
+    monkeypatch.delenv("OJ_TLS_DIR", raising=False)
     importlib.reload(config)

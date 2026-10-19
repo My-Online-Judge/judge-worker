@@ -7,6 +7,7 @@ from kafka.errors import (CommitFailedError, KafkaError, KafkaTimeoutError, Mess
 from kafka.structs import TopicPartition
 from prometheus_client import REGISTRY
 
+import tls
 import verdict
 import worker
 
@@ -193,6 +194,22 @@ def test_connect_waits_for_a_broker_instead_of_exiting():
     assert worker.connect(build, "cfg", sleep=slept.append) == "consumer"
     assert slept == [1, 2]
     build.assert_called_with("cfg")
+
+
+def test_connect_does_not_retry_a_tls_misconfiguration(tls_dir):
+    """A missing certificate is not Kafka being away: it leaves connect() at once and stops the worker (fail closed)."""
+    (tls_dir / "tls.key").unlink()
+    calls, slept = [], []
+
+    def build(cfg):
+        calls.append(cfg)
+        # a retry would get a client here, so an except widened past NoBrokersAvailable fails this test, not hangs it
+        return tls.kafka_kwargs() if len(calls) == 1 else "consumer"
+
+    with pytest.raises(RuntimeError, match="tls.key"):
+        worker.connect(build, "cfg", sleep=slept.append)
+    assert calls == ["cfg"]
+    assert slept == []
 
 
 def test_a_record_the_wait_s_poll_fetches_is_rewound_not_dropped():
