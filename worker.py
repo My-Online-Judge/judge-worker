@@ -7,6 +7,7 @@ from kafka.errors import BrokerResponseError, KafkaError, NoBrokersAvailable
 from opentelemetry.trace import SpanKind
 from prometheus_client import Counter
 
+import infra_errors
 import tracing
 from handler import process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
 
@@ -93,6 +94,33 @@ def publish_started(producer, config, submission_id):
         log.warning("Start of submission %s not announced (%r)", submission_id, exc)
 
 
+def judge_with_infra_retry(event, config, on_started, wait):
+    """process_event, started again while MinIO or every sandbox is away (infra_errors.transient_reason), after
+    2 s, 4 s … 60 s, until JUDGE_INFRA_RETRY_SECONDS would be exceeded: then a SYSTEM_ERROR. wait is run()'s
+    pause/poll/seek, so nothing is committed meanwhile and the group keeps the partition. Any other failure is a
+    SYSTEM_ERROR at once."""
+    submission_id = event["submissionId"]
+    began = time.monotonic()
+    delays = infra_errors.infra_delays()
+    while True:
+        try:
+            return process_event(event, config, on_started=on_started)
+        except Exception as exc:  # judge-server down / timeout / bad response
+            reason = infra_errors.transient_reason(exc)
+            if reason is None:
+                log.exception("Judging failed for submission %s", submission_id)
+                return system_error_event(submission_id, str(exc))
+            delay = next(delays)
+            if time.monotonic() - began + delay > config.JUDGE_INFRA_RETRY_SECONDS:
+                log.error("Judge infrastructure (%s) still unavailable for submission %s after %.0f s (%r); giving up",
+                          reason, submission_id, time.monotonic() - began, exc)
+                return system_error_event(submission_id, infra_errors.GIVE_UP_MESSAGE)
+            infra_errors.INFRA_RETRIES.labels(reason).inc()
+            log.warning("Judge infrastructure (%s) unavailable for submission %s (%r); judging again in %d s",
+                        reason, submission_id, exc, delay)
+            wait(delay)
+
+
 def handle_one(event, config, producer, headers=None, wait=time.sleep):
     if event is None:
         log.error("Skipping malformed (non-JSON) message")
@@ -108,12 +136,8 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep):
             context=tracing.context_from_headers(headers),
             kind=SpanKind.CONSUMER,
             attributes={"oj.submission_id": submission_id}) as span:
-        try:
-            judged = process_event(
-                event, config, on_started=lambda: publish_started(producer, config, submission_id))
-        except Exception as exc:  # judge-server down / timeout / bad response
-            log.exception("Judging failed for submission %s", submission_id)
-            judged = system_error_event(submission_id, str(exc))
+        judged = judge_with_infra_retry(
+            event, config, lambda: publish_started(producer, config, submission_id), wait)
         span.set_attribute("oj.verdict_status", judged.get("status"))
         publish_until_sent(producer, config, submission_id, judged,
                            tracing.headers_from_current_context(), wait)

@@ -18,6 +18,9 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 - JUDGE_SERVER_TOKEN (bắt buộc, không có default: thiếu thì worker dừng ngay khi khởi động)
 - REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS
 - STARTED_TOPIC (default submission.started) — worker báo bắt đầu chấm trước mỗi lần dispatch; WORKER_ID (default hostname)
+- JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
+  quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Không retry
+  khi ReadTimeout (sandbox có thể đang chấm) hay lỗi chứng chỉ TLS (cấu hình sai, không tự khỏi)
 - METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total
 - SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker chuyển `/ping` của
   từng sandbox về registry thay cho sandbox (sandbox ở mạng internal, không tới được submission-service);

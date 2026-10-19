@@ -5,6 +5,8 @@ import pytest
 from kafka.errors import (CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError,
                           NoBrokersAvailable)
 from kafka.structs import TopicPartition
+from urllib3.exceptions import MaxRetryError
+import requests
 from prometheus_client import REGISTRY
 
 import tls
@@ -259,7 +261,7 @@ def test_the_seconds_spent_waiting_to_resend_are_counted():
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
     before = REGISTRY.get_sample_value("oj_verdict_publish_wait_seconds_total") or 0
     with patch("worker.process_event", return_value={"submissionId": "s15", "status": 0}), \
-            patch("worker.time.monotonic", side_effect=[100.0, 107.5]):
+            patch("worker.time.monotonic", side_effect=[0.0, 100.0, 107.5]):
         worker.handle_one({"submissionId": "s15"}, cfg, producer, wait=lambda s: None)
     assert (REGISTRY.get_sample_value("oj_verdict_publish_wait_seconds_total") or 0) - before == 7.5
 
@@ -309,3 +311,103 @@ def test_a_failed_start_publish_does_not_stop_judging():
 
     judged = [c for c in producer.send.call_args_list if c.args[0] == "submission.judged"]
     assert len(judged) == 1
+
+
+# --- infrastructure retries (sub-project 11) ---
+
+def infra_retries(reason):
+    return REGISTRY.get_sample_value("oj_judge_infra_retries_total", {"reason": reason}) or 0
+
+
+def infra_cfg(budget=300):
+    return MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
+                     PUBLISH_TIMEOUT_SECONDS=10, JUDGE_INFRA_RETRY_SECONDS=budget)
+
+
+def verdicts(producer):
+    return [c.kwargs["value"] for c in producer.send.call_args_list if c.args[0] == "submission.judged"]
+
+
+def test_a_minio_outage_is_retried_then_judged():
+    producer, waits, before = MagicMock(), [], infra_retries("minio")
+    outcomes = [MaxRetryError(None, "/b"), MaxRetryError(None, "/b"), {"submissionId": "s30", "status": 0}]
+    with patch("worker.process_event", side_effect=outcomes):
+        worker.handle_one({"submissionId": "s30"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == [2, 4]
+    assert [v["status"] for v in verdicts(producer)] == [0]
+    assert infra_retries("minio") - before == 2
+
+
+def test_sandboxes_refusing_are_retried():
+    producer, waits, before = MagicMock(), [], infra_retries("sandbox")
+    with patch("worker.process_event",
+               side_effect=[requests.ConnectionError("refused"), {"submissionId": "s31", "status": 0}]):
+        worker.handle_one({"submissionId": "s31"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == [2]
+    assert infra_retries("sandbox") - before == 1
+    assert [v["status"] for v in verdicts(producer)] == [0]
+
+
+def test_a_read_timeout_is_not_retried():
+    producer, waits = MagicMock(), []
+    with patch("worker.process_event", side_effect=requests.ReadTimeout("slow")):
+        worker.handle_one({"submissionId": "s32"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == []
+    assert [v["status"] for v in verdicts(producer)] == [verdict.SYSTEM_ERROR]
+
+
+def test_a_certificate_failure_is_not_retried():
+    producer, waits = MagicMock(), []
+    with patch("worker.process_event", side_effect=requests.exceptions.SSLError("certificate verify failed")):
+        worker.handle_one({"submissionId": "s36"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == []
+    sent = verdicts(producer)
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    assert "certificate verify failed" in sent[0]["error_message"]
+
+
+def test_the_retry_budget_ends_in_a_system_error():
+    producer, waits, clock = MagicMock(), [], [1000.0]
+
+    def wait(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    with patch("worker.process_event", side_effect=MaxRetryError(None, "/b")), \
+            patch("worker.time.monotonic", side_effect=lambda: clock[0]):
+        worker.handle_one({"submissionId": "s33"}, infra_cfg(300), producer, wait=wait)
+    assert waits == [2, 4, 8, 16, 32, 60, 60, 60]
+    sent = verdicts(producer)
+    assert len(sent) == 1
+    assert sent[0]["status"] == verdict.SYSTEM_ERROR
+    assert sent[0]["error_message"] == "Judge infrastructure unavailable"
+
+
+def test_each_retry_announces_the_start_again():
+    producer = MagicMock()
+    calls = itertools.count()
+
+    def fake_process(event, config, on_started=None):
+        on_started()
+        if next(calls) < 2:
+            raise requests.ConnectionError("refused")
+        return {"submissionId": "s34", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s34"}, infra_cfg(), producer, wait=lambda s: None)
+    started = [c for c in producer.send.call_args_list if c.args[0] == "submission.started"]
+    assert len(started) == 3
+
+
+def test_run_commits_only_after_the_retried_verdict():
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s35"})]
+    with patch("worker.process_event",
+               side_effect=[requests.ConnectionError("refused"), {"submissionId": "s35", "status": 0}]):
+        worker.run(infra_cfg(), consumer, producer)
+    names = [c[0] for c in manager.mock_calls]
+    assert names.index("consumer.pause") < names.index("consumer.poll") < names.index("producer.send") \
+        < names.index("consumer.commit")
+    assert consumer.poll.call_args.kwargs == {"timeout_ms": 2000}
+    assert names.count("consumer.commit") == 1

@@ -39,6 +39,9 @@ class Config:
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
     # How long one verdict publish waits for Kafka's acknowledgement before it is sent again (sub-project 7 §3.2).
     PUBLISH_TIMEOUT_SECONDS = _int_env("PUBLISH_TIMEOUT_SECONDS", 10)
+    # How long MinIO or every sandbox may stay away before the submission ends in a SYSTEM_ERROR (sub-project 11):
+    # the judging is started again after 2 s, 4 s, 8 s … capped at 60 s.
+    JUDGE_INFRA_RETRY_SECONDS = _int_env("JUDGE_INFRA_RETRY_SECONDS", 300)
     # submission-service's judge-server registry. The sandboxes cannot reach it (internal network), so
     # the worker relays each one's /ping there. Empty = no relay.
     SANDBOX_HEARTBEAT_URL = os.getenv("SANDBOX_HEARTBEAT_URL", "")
