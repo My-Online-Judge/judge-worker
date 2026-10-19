@@ -1,5 +1,6 @@
 import logging
 import verdict
+from event_limits import limit_event
 from dispatcher import build_judge_body, dispatch_judge
 from log_context import submission_id_var
 from test_case_sync import ensure_present, maybe_sweep
@@ -30,7 +31,7 @@ def build_judged_event(submission_id, judge_response):
 
 
 def _event(submission_id, status, result, cpu, real, mem, error_message, details):
-    return {
+    return limit_event({
         "submissionId": submission_id,
         "status": status,
         "result": result,
@@ -39,7 +40,7 @@ def _event(submission_id, status, result, cpu, real, mem, error_message, details
         "memory": mem,
         "error_message": error_message,
         "details": details,
-    }
+    })
 
 
 def system_error_event(submission_id, message):
