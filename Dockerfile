@@ -11,4 +11,7 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py ./
+# Non-root (sp12): the code is root-owned and world-readable; the test-case cache volume is chowned by volume-init.
+RUN groupadd -g 10001 oj && useradd -u 10001 -g oj -M -s /usr/sbin/nologin oj
+USER 10001:10001
 CMD ["python", "main.py"]
