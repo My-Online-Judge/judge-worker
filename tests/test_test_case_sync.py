@@ -1,6 +1,7 @@
 import errno
 import io
 import os
+import stat
 import time
 import zipfile
 
@@ -77,6 +78,23 @@ class _ZipClient:
         if self._error:
             raise self._error
         _write_bundle_zip(dest, self._files)
+
+
+def test_installed_bundle_is_readable_by_the_spj_user(tmp_path):
+    # qduoj runs a checker as its own user (spj, uid 12003), and the checker opens argv[1] = /test_case/<id>/<n>.in
+    # itself. mkdtemp makes the directory 0700 and extraction follows the umask, so the worker sets the modes. Worker CI
+    # runs as root, so the modes are the check, not an access attempt.
+    old_umask = os.umask(0o077)
+    try:
+        dest = test_case_sync.ensure_present("slug__abc", cache_root=str(tmp_path), client=_ZipClient(), bucket="b")
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(os.stat(dest).st_mode) == 0o755
+    names = sorted(os.listdir(dest))
+    assert names == ["1.in", "1.out", "info"]
+    for name in names:
+        assert stat.S_IMODE(os.stat(os.path.join(dest, name)).st_mode) == 0o644, name
 
 
 def test_ensure_present_race_loser_is_swallowed(tmp_path, monkeypatch):

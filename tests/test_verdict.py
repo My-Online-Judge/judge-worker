@@ -33,5 +33,6 @@ def test_compute_stats_handles_none_values():
 
 def test_map_envelope_error():
     assert verdict.map_envelope_error("CompileError") == verdict.COMPILE_ERROR
-    assert verdict.map_envelope_error("SPJCompileError") == verdict.COMPILE_ERROR
+    # A checker that does not compile is the problem's fault, not the contestant's (SP13).
+    assert verdict.map_envelope_error("SPJCompileError") == verdict.SYSTEM_ERROR
     assert verdict.map_envelope_error("TokenVerificationFailed") == verdict.SYSTEM_ERROR

@@ -33,6 +33,49 @@ def test_build_judge_body_picks_judge_fields():
     assert "submissionId" not in body
 
 
+# --- SP13: a checker problem's request carries qduoj's four spj fields (submission-service sends all four or none) ---
+
+_PLAIN_EVENT = {
+    "submissionId": "sub-1",
+    "src": "code",
+    "language_config": {"compile": {}, "run": {}},
+    "max_cpu_time": 1000,
+    "max_memory": 268435456,
+    "test_case_id": "prob__abc",
+    "output": True,
+    "rejudgeCount": 0,
+}
+_PLAIN_BODY = {
+    "src": "code",
+    "language_config": {"compile": {}, "run": {}},
+    "max_cpu_time": 1000,
+    "max_memory": 268435456,
+    "test_case_id": "prob__abc",
+    "output": True,
+}
+_SPJ = {
+    "spj_version": "ab12",
+    "spj_config": {"exe_name": "spj-{spj_version}", "command": "{exe_path} {in_file_path} {user_out_file_path}",
+                   "seccomp_rule": "c_cpp"},
+    "spj_compile_config": {"env": [], "src_name": "spj-{spj_version}.cpp", "exe_name": "spj-{spj_version}",
+                           "max_cpu_time": 10000, "max_real_time": 20000, "max_memory": 1073741824,
+                           "compile_command": "/usr/bin/g++ -DONLINE_JUDGE -O2 -w -fmax-errors=3 -std=c++17 "
+                                              "{src_path} -lm -o {exe_path}"},
+    "spj_src": "int main(){}",
+}
+
+
+def test_build_judge_body_passes_spj_fields():
+    body = dispatcher.build_judge_body({**_PLAIN_EVENT, **_SPJ})
+    # qduoj's JudgeServer.judge(**body) takes these four as keyword arguments, verbatim.
+    assert body == {**_PLAIN_BODY, **_SPJ}
+
+
+def test_build_judge_body_omits_absent_spj_fields():
+    assert dispatcher.build_judge_body(_PLAIN_EVENT) == _PLAIN_BODY
+    assert dispatcher.build_judge_body({**_PLAIN_EVENT, "spj_version": None}) == _PLAIN_BODY
+
+
 @patch("dispatcher.requests.post")
 def test_call_judge_server_posts_with_token_header(mock_post):
     resp = MagicMock()

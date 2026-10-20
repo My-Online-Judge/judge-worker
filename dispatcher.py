@@ -11,6 +11,9 @@ import tls
 log = logging.getLogger("judge-worker")
 
 _JUDGE_BODY_FIELDS = ("src", "language_config", "max_cpu_time", "max_memory", "test_case_id")
+# A checker problem's checker, under the names qduoj's JudgeServer.judge takes (SP13). submission-service sends all four
+# or none.
+_SPJ_FIELDS = ("spj_version", "spj_config", "spj_compile_config", "spj_src")
 
 # Judge requests sent to each sandbox, by outcome. E4's c3 criterion counts the failed ones (sub-project 6 §3.2 C).
 DISPATCHES = Counter("oj_judge_dispatch", "Judge requests sent to a sandbox, by outcome", ["sandbox", "outcome"])
@@ -32,6 +35,8 @@ def token_header(token):
 def build_judge_body(event):
     body = {field: event[field] for field in _JUDGE_BODY_FIELDS}
     body["output"] = event.get("output", True)
+    if event.get("spj_version"):
+        body.update({field: event[field] for field in _SPJ_FIELDS})
     return body
 
 

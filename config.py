@@ -37,6 +37,9 @@ class Config:
     WORKER_ID = os.getenv("WORKER_ID", socket.gethostname())
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
+    # Added to that timeout for a request that carries a checker (SP13): qduoj compiles the checker inside the first
+    # such request on each sandbox (10 s CPU / 20 s real) before it judges.
+    SPJ_COMPILE_ALLOWANCE_SECONDS = _int_env("SPJ_COMPILE_ALLOWANCE_SECONDS", 20)
     # How long one verdict publish waits for Kafka's acknowledgement before it is sent again (sub-project 7 §3.2).
     PUBLISH_TIMEOUT_SECONDS = _int_env("PUBLISH_TIMEOUT_SECONDS", 10)
     # How long MinIO or every sandbox may stay away before the submission ends in a SYSTEM_ERROR (sub-project 11):
@@ -55,10 +58,10 @@ class Config:
     # Judging is slow and blocking, so fetch a single submission per poll: a large batch would
     # make the gap between poll() calls exceed max.poll.interval.ms and get us evicted mid-judge.
     MAX_POLL_RECORDS = _int_env("MAX_POLL_RECORDS", 1)
-    # Give one (slowest) judge plus a 30s margin (compile, judge-server round-trip, delivery ack)
-    # before Kafka decides we are stuck and rebalances our partitions away.
+    # Give one (slowest) judge, a checker's compile included, plus a 30s margin (compile, judge-server round-trip,
+    # delivery ack) before Kafka decides we are stuck and rebalances our partitions away.
     MAX_POLL_INTERVAL_MS = _int_env(
-        "MAX_POLL_INTERVAL_MS", JUDGE_TIMEOUT_SECONDS * 1000 + 30000
+        "MAX_POLL_INTERVAL_MS", (JUDGE_TIMEOUT_SECONDS + SPJ_COMPILE_ALLOWANCE_SECONDS) * 1000 + 30000
     )
     # Liveness heartbeat runs on a background thread (independent of poll); keep the heartbeat
     # comfortably below the session timeout as Kafka requires.

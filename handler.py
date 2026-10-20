@@ -7,6 +7,10 @@ from test_case_sync import ensure_present, maybe_sweep
 
 log = logging.getLogger("judge-worker")
 
+# What the submitter sees when the problem's checker does not compile. qduoj's data is then the checker's compiler
+# output, which quotes the checker's source: it stays in the worker's log.
+SPJ_COMPILE_ERROR_MESSAGE = "SPJCompileError: the problem's checker does not compile"
+
 
 def build_judged_event(submission_id, judge_response):
     err = judge_response.get("err")
@@ -14,9 +18,13 @@ def build_judged_event(submission_id, judge_response):
 
     # Case 1: envelope-level error, e.g. {"err":"CompileError","data":"..."}.
     if err is not None:
-        extra = "" if data is None else f": {data}"
+        if err == "SPJCompileError":
+            log.warning("Submission %s: the problem's checker does not compile: %s", submission_id, data)
+            message = SPJ_COMPILE_ERROR_MESSAGE
+        else:
+            message = err if data is None else f"{err}: {data}"
         return _event(submission_id, verdict.map_envelope_error(err),
-                      None, 0, 0, 0, f"{err}{extra}", [])
+                      None, 0, 0, 0, message, [])
 
     # Case 2: per-testcase result array.
     if isinstance(data, list):
@@ -57,9 +65,12 @@ def process_event(event, config, on_started=None):
         if on_started is not None:
             on_started()
         body = build_judge_body(event)
+        timeout = config.JUDGE_TIMEOUT_SECONDS
+        if "spj_version" in body:
+            # The sandbox may first have to compile the checker (Config.SPJ_COMPILE_ALLOWANCE_SECONDS).
+            timeout += config.SPJ_COMPILE_ALLOWANCE_SECONDS
         judge_response = dispatch_judge(
-            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body,
-            timeout=config.JUDGE_TIMEOUT_SECONDS,
+            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body, timeout=timeout,
         )
         return build_judged_event(event["submissionId"], judge_response)
     finally:

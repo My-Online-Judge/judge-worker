@@ -35,7 +35,7 @@ def test_judge_timeout_seconds_good_value_is_parsed(monkeypatch):
 # --- T2-5: consumer poll / rebalance tuning ---
 
 def _reload_config_clean(monkeypatch, *keep):
-    for v in ("JUDGE_TIMEOUT_SECONDS", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
+    for v in ("JUDGE_TIMEOUT_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
               "SESSION_TIMEOUT_MS", "HEARTBEAT_INTERVAL_MS"):
         if v not in keep:
             monkeypatch.delenv(v, raising=False)
@@ -58,6 +58,13 @@ def test_max_poll_interval_scales_with_judge_timeout(monkeypatch):
     monkeypatch.setenv("JUDGE_TIMEOUT_SECONDS", "60")
     c = _reload_config_clean(monkeypatch, "JUDGE_TIMEOUT_SECONDS")
     assert c.MAX_POLL_INTERVAL_MS >= 60 * 1000 + 30000
+
+
+def test_max_poll_interval_covers_the_allowance(monkeypatch):
+    c = _reload_config_clean(monkeypatch)
+    assert c.SPJ_COMPILE_ALLOWANCE_SECONDS == 20
+    # One judge of a checker problem (30 s, plus 20 s to compile the checker) and the 30 s margin.
+    assert c.MAX_POLL_INTERVAL_MS == 80_000
 
 
 def test_consumer_tuning_env_override(monkeypatch):

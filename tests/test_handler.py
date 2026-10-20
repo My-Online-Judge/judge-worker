@@ -1,3 +1,5 @@
+import json
+import logging
 from unittest.mock import patch
 
 import handler
@@ -20,12 +22,26 @@ def test_build_judged_event_success_array():
     assert len(out["details"]) == 2
 
 
-def test_build_judged_event_compile_error_envelope():
+def test_compile_error_is_still_a_compile_error():
+    # The contestant's own program: their verdict, with their compiler's output.
     resp = {"err": "CompileError", "data": "line 3: syntax error"}
     out = handler.build_judged_event("sub-2", resp)
     assert out["status"] == verdict.COMPILE_ERROR
     assert out["error_message"] == "CompileError: line 3: syntax error"
     assert out["details"] == []
+
+
+def test_spj_compile_error_is_a_system_error_without_the_checker_output(caplog):
+    # qduoj's data is the checker's compiler output, which quotes the checker's source.
+    resp = {"err": "SPJCompileError", "data": "spj.cpp:3: error: 'expected' was not declared in this scope"}
+    with caplog.at_level(logging.WARNING, logger="judge-worker"):
+        out = handler.build_judged_event("sub-4", resp)
+    assert out["status"] == verdict.SYSTEM_ERROR == 5
+    assert out["error_message"] == "SPJCompileError: the problem's checker does not compile"
+    assert "spj.cpp:3" not in json.dumps(out)
+    assert out["details"] == []
+    # The output stays in the worker's log, at WARN.
+    assert [r.levelno for r in caplog.records if "spj.cpp:3" in r.getMessage()] == [logging.WARNING]
 
 
 def test_build_judged_event_unexpected_data_is_system_error():
@@ -52,3 +68,24 @@ def test_process_event_dispatches_to_judge_servers(monkeypatch):
     assert m.call_args.args[0] == ["http://js1:8080", "http://js2:8080"]
     assert out["submissionId"] == "sub-9"
     assert out["status"] == verdict.ACCEPTED
+
+
+def test_checker_requests_get_the_compile_allowance():
+    # qduoj compiles a checker inside the first request that needs it on each sandbox (up to 20 s real), on top of the
+    # judging itself; a read timeout would end the submission in SYSTEM_ERROR.
+    plain = {"submissionId": "sub-10", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
+             "test_case_id": "p__h", "output": True}
+    checker = {**plain, "submissionId": "sub-11", "spj_version": "ab12", "spj_config": {}, "spj_compile_config": {},
+               "spj_src": "int main(){}"}
+
+    class Cfg:
+        JUDGE_SERVER_URLS = ["http://js1:8080"]
+        JUDGE_SERVER_TOKEN = "t"
+        JUDGE_TIMEOUT_SECONDS = 30
+        SPJ_COMPILE_ALLOWANCE_SECONDS = 20
+
+    with patch("handler.ensure_present"), \
+         patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
+        handler.process_event(checker, Cfg)
+        handler.process_event(plain, Cfg)
+    assert [(c.args[2].get("spj_version"), c.kwargs["timeout"]) for c in m.call_args_list] == [("ab12", 50), (None, 30)]

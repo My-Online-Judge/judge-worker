@@ -52,9 +52,10 @@ def compute_stats(details):
 def map_envelope_error(err):
     """Map envelope error string to verdict code.
 
-    CompileError or SPJCompileError -> COMPILE_ERROR
-    Any other error -> SYSTEM_ERROR
+    CompileError -> COMPILE_ERROR
+    Any other error -> SYSTEM_ERROR, SPJCompileError included: a checker that does not compile is the problem's
+    fault, not the contestant's.
     """
-    if err in ("CompileError", "SPJCompileError"):
+    if err == "CompileError":
         return COMPILE_ERROR
     return SYSTEM_ERROR

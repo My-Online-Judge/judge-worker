@@ -23,6 +23,14 @@ def _safe_extract_zip(zip_path, dest_dir):
         zf.extractall(dest_dir)
 
 
+def _open_to_every_user(bundle_dir):
+    """Set the modes qduoj's checker needs, whatever the umask: the checker runs as its own user (spj, uid 12003) and
+    opens argv[1] = <bundle_dir>/<n>.in itself, while mkdtemp made the directory 0700. Bundles are flat files."""
+    for name in os.listdir(bundle_dir):
+        os.chmod(os.path.join(bundle_dir, name), 0o644)
+    os.chmod(bundle_dir, 0o755)
+
+
 def _default_client():
     # Imported lazily so unit tests (which inject a fake client) need no `minio` install.
     from minio import Minio
@@ -65,6 +73,7 @@ def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):
         client.fget_object(bucket, key, tmp_zip)
         _safe_extract_zip(tmp_zip, tmp_dir)
         os.remove(tmp_zip)
+        _open_to_every_user(tmp_dir)
         try:
             os.replace(tmp_dir, dest)  # atomic install
         except OSError as e:
