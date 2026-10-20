@@ -17,6 +17,9 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 - JUDGE_SERVER_URL (default http://localhost:8080; compose: https://judge-server:8080,https://judge-server-2:8080)
 - JUDGE_SERVER_TOKEN (bắt buộc, không có default: thiếu thì worker dừng ngay khi khởi động)
 - REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS
+- SPJ_COMPILE_ALLOWANCE_SECONDS (default 20) — request có checker được chờ JUDGE_TIMEOUT_SECONDS + chừng này giây, vì
+  sandbox biên dịch checker ở lần dùng đầu (qduoj: tối đa 20 s); MAX_POLL_INTERVAL_MS mặc định
+  (JUDGE_TIMEOUT_SECONDS + SPJ_COMPILE_ALLOWANCE_SECONDS) × 1000 + 30000
 - STARTED_TOPIC (default submission.started) — worker báo bắt đầu chấm trước mỗi lần dispatch; WORKER_ID (default hostname)
 - JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
   quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Không retry
