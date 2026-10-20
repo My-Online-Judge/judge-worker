@@ -313,6 +313,65 @@ def test_a_failed_start_publish_does_not_stop_judging():
     assert len(judged) == 1
 
 
+# --- verdict generations (SP12): the request's rejudgeCount comes back on the start and the verdict ---
+
+def generation_cfg():
+    return MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
+                     PUBLISH_TIMEOUT_SECONDS=10, JUDGE_INFRA_RETRY_SECONDS=300)
+
+
+def sent_on(producer, topic):
+    return [c.kwargs["value"] for c in producer.send.call_args_list if c.args[0] == topic]
+
+
+def judged_after_start(submission_id):
+    def fake_process(event, config, on_started=None):
+        on_started()
+        return {"submissionId": submission_id, "status": 0}
+    return fake_process
+
+
+@pytest.mark.parametrize("generation", [0, 3])
+def test_started_and_verdict_echo_rejudge_count(generation):
+    producer = MagicMock()
+    with patch("worker.process_event", side_effect=judged_after_start("s40")):
+        worker.handle_one({"submissionId": "s40", "rejudgeCount": generation}, generation_cfg(), producer)
+    [started] = sent_on(producer, "submission.started")
+    [judged] = sent_on(producer, "submission.judged")
+    assert started["rejudgeCount"] == generation
+    assert judged == {"submissionId": "s40", "status": 0, "rejudgeCount": generation}
+
+
+def test_a_judging_failure_s_system_error_echoes_rejudge_count():
+    producer = MagicMock()
+    with patch("worker.process_event", side_effect=RuntimeError("judge down")):
+        worker.handle_one({"submissionId": "s41", "rejudgeCount": 2}, generation_cfg(), producer)
+    [judged] = sent_on(producer, "submission.judged")
+    assert judged["status"] == verdict.SYSTEM_ERROR and judged["rejudgeCount"] == 2
+
+
+def test_no_rejudge_count_key_when_the_request_had_none():
+    # A request queued before generations existed: submission-service applies the start and verdict unguarded.
+    producer = MagicMock()
+    with patch("worker.process_event", side_effect=judged_after_start("s42")):
+        worker.handle_one({"submissionId": "s42"}, generation_cfg(), producer)
+    [started] = sent_on(producer, "submission.started")
+    [judged] = sent_on(producer, "submission.judged")
+    assert set(started) == {"submissionId", "worker", "startedAt"}
+    assert "rejudgeCount" not in judged
+
+
+def test_unpublishable_verdict_replacement_keeps_rejudge_count():
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = [MessageSizeTooLargeError(), None]
+    with patch("worker.process_event", return_value={"submissionId": "s43", "status": 0, "details": ["x" * 10]}):
+        worker.handle_one({"submissionId": "s43", "rejudgeCount": 4}, generation_cfg(), producer,
+                          wait=lambda s: None)
+    replacement = sent_on(producer, "submission.judged")[-1]
+    assert replacement["status"] == verdict.SYSTEM_ERROR and replacement["details"] == []
+    assert replacement["rejudgeCount"] == 4
+
+
 # --- infrastructure retries (sub-project 11) ---
 
 def infra_retries(reason):

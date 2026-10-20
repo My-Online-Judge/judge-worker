@@ -21,6 +21,10 @@ PUBLISH_RETRIES = Counter("oj_verdict_publish_retries", "Verdict publishes that 
 PUBLISH_WAIT_SECONDS = Counter("oj_verdict_publish_wait_seconds", "Seconds spent waiting to send a verdict again")
 BACKOFF_START_SECONDS = 1
 BACKOFF_MAX_SECONDS = 10
+# The submission's generation as submission-service queued it (0 for a submit, n after the n-th rejudge). Echoed
+# unchanged on submission.started and submission.judged, so a start or verdict of an earlier judging is not applied to
+# a rejudged submission (SP12).
+GENERATION_KEY = "rejudgeCount"
 
 
 def backoff_delays():
@@ -42,6 +46,13 @@ def connect(build, config, sleep=time.sleep):
             sleep(delay)
 
 
+def generation_of(message):
+    """The message's rejudgeCount, as a dict to merge into what is published about it. Empty when the message has
+    none (a request queued before generations existed): then nothing is added and submission-service applies the start
+    and the verdict as before."""
+    return {GENERATION_KEY: message[GENERATION_KEY]} if GENERATION_KEY in message else {}
+
+
 def safe_json_deserialize(b):
     if b is None:
         return None
@@ -55,8 +66,8 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait):
     """Send the verdict until Kafka acknowledges it. A KafkaError — Kafka away, no metadata, no acknowledgement in
     time — is logged, counted, and the same verdict sent again after wait(seconds). A record the broker refuses for
     good (a non-retriable broker answer, e.g. MessageSizeTooLargeError: the verdict carries the program's whole
-    output) is replaced once by a SYSTEM_ERROR without details, as when judging itself fails; if that is refused too,
-    it propagates. Anything else is a bug: it propagates."""
+    output) is replaced once by a SYSTEM_ERROR without details but with the verdict's rejudgeCount, as when judging
+    itself fails; if that is refused too, it propagates. Anything else is a bug: it propagates."""
     replaced = False
     for delay in backoff_delays():
         try:
@@ -70,7 +81,8 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait):
                     raise
                 log.error("Kafka refused the verdict of submission %s for good (%r); sending a SYSTEM_ERROR instead",
                           submission_id, exc)
-                judged, replaced = system_error_event(submission_id, f"verdict not publishable: {exc!r}"), True
+                replacement = system_error_event(submission_id, f"verdict not publishable: {exc!r}")
+                judged, replaced = {**replacement, **generation_of(judged)}, True
                 continue
             log.warning("Verdict of submission %s not published (%r); sending it again in %d s",
                         submission_id, exc, delay)
@@ -84,12 +96,13 @@ def started_at_now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def publish_started(producer, config, submission_id):
-    """Tell submission-service judging begins now. Advisory: not awaited, and a KafkaError is only logged."""
+def publish_started(producer, config, submission_id, generation=None):
+    """Tell submission-service judging begins now, with the request's generation (generation_of) when it had one.
+    Advisory: not awaited, and a KafkaError is only logged."""
     try:
         producer.send(config.STARTED_TOPIC, key=submission_id,
                       value={"submissionId": submission_id, "worker": config.WORKER_ID,
-                             "startedAt": started_at_now()})
+                             "startedAt": started_at_now(), **(generation or {})})
     except KafkaError as exc:
         log.warning("Start of submission %s not announced (%r)", submission_id, exc)
 
@@ -136,8 +149,10 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep):
             context=tracing.context_from_headers(headers),
             kind=SpanKind.CONSUMER,
             attributes={"oj.submission_id": submission_id}) as span:
+        generation = generation_of(event)
         judged = judge_with_infra_retry(
-            event, config, lambda: publish_started(producer, config, submission_id), wait)
+            event, config, lambda: publish_started(producer, config, submission_id, generation), wait)
+        judged = {**judged, **generation}  # every verdict, a SYSTEM_ERROR included, names the request's generation
         span.set_attribute("oj.verdict_status", judged.get("status"))
         publish_until_sent(producer, config, submission_id, judged,
                            tracing.headers_from_current_context(), wait)
