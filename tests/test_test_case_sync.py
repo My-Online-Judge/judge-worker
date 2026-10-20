@@ -80,21 +80,67 @@ class _ZipClient:
         _write_bundle_zip(dest, self._files)
 
 
-def test_installed_bundle_is_readable_by_the_spj_user(tmp_path):
-    # qduoj runs a checker as its own user (spj, uid 12003), and the checker opens argv[1] = /test_case/<id>/<n>.in
-    # itself. mkdtemp makes the directory 0700 and extraction follows the umask, so the worker sets the modes. Worker CI
-    # runs as root, so the modes are the check, not an access attempt.
-    old_umask = os.umask(0o077)
+_CHECKER_FILES = {"info": '{"test_case_number": 2, "spj": true}', "1.in": "1 2\n", "1.out": "3\n",
+                  "2.in": "40 2\n", "2.out": "42\n"}
+
+
+def _mode(path):
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def _changed(path):
+    return "<dir>" if os.path.isdir(path) else os.path.basename(path)
+
+
+def _install(tmp_path, umask, files=None):
+    old_umask = os.umask(umask)
     try:
-        dest = test_case_sync.ensure_present("slug__abc", cache_root=str(tmp_path), client=_ZipClient(), bucket="b")
+        return test_case_sync.ensure_present("slug__abc", cache_root=str(tmp_path), client=_ZipClient(files),
+                                             bucket="b")
     finally:
         os.umask(old_umask)
 
-    assert stat.S_IMODE(os.stat(dest).st_mode) == 0o755
-    names = sorted(os.listdir(dest))
-    assert names == ["1.in", "1.out", "info"]
-    for name in names:
-        assert stat.S_IMODE(os.stat(os.path.join(dest, name)).st_mode) == 0o644, name
+
+@pytest.mark.parametrize("umask", [0o000, 0o022, 0o077], ids=lambda u: f"umask{u:03o}")
+def test_installed_bundle_is_readable_by_the_spj_user(tmp_path, monkeypatch, umask):
+    # A checker bundle ("spj": true in info). qduoj runs the checker as spj (uid 12003, primary group 12003), and the
+    # checker opens argv[1] = /test_case/<id>/<n>.in itself; a submission runs as code (uid 12002), which is not in
+    # group 12003. So the directory and the inputs go to group 12003 (the worker joins it: compose group_add), while the
+    # expected outputs and info stay the owner's only (root reads them in the sandbox, through DAC_OVERRIDE). The modes
+    # do not depend on the umask. A test run is not in group 12003, so os.chown is recorded here, not made.
+    chowns = []
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: chowns.append((_changed(path), uid, gid)))
+
+    dest = _install(tmp_path, umask, _CHECKER_FILES)
+
+    assert sorted(chowns) == [("1.in", -1, 12003), ("2.in", -1, 12003), ("<dir>", -1, 12003)]
+    assert _mode(dest) == 0o750
+    assert {name: _mode(os.path.join(dest, name)) for name in os.listdir(dest)} == {
+        "1.in": 0o640, "2.in": 0o640, "1.out": 0o600, "2.out": 0o600, "info": 0o600}
+
+
+@pytest.mark.parametrize("info", ['{"test_case_number": 1}', '{"test_case_number": 1, "spj": false}'],
+                         ids=["no-spj-key", "spj-false"])
+@pytest.mark.parametrize("umask", [0o000, 0o022], ids=lambda u: f"umask{u:03o}")
+def test_plain_bundle_stays_private_to_the_worker(tmp_path, monkeypatch, info, umask):
+    # Without a checker only root reads a bundle in the sandbox: qduoj opens a run's stdin as root before it drops to
+    # code (12002), and compares the output as root. mkdtemp's 0700 directory is what keeps a submission away from the
+    # expected outputs, so the worker changes no owner and no mode, as before SP13.
+    changes = []
+    real_chmod = os.chmod
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: changes.append(("chown", _changed(path), uid, gid)))
+
+    def chmod(path, mode):
+        changes.append(("chmod", _changed(path), mode))
+        real_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+
+    dest = _install(tmp_path, umask, {"info": info, "1.in": "1 2\n", "1.out": "3\n"})
+
+    assert changes == []
+    assert _mode(dest) == 0o700
+    assert sorted(os.listdir(dest)) == ["1.in", "1.out", "info"]
 
 
 def test_ensure_present_race_loser_is_swallowed(tmp_path, monkeypatch):

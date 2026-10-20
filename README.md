@@ -27,3 +27,9 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
   không đặt thì tắt. SANDBOX_HEARTBEAT_INTERVAL_SECONDS (default 10)
 - OTEL_EXPORTER_OTLP_ENDPOINT (vd http://jaeger:4318) — bật tracing (OTLP/HTTP); không đặt thì tracing tắt hoàn toàn
 - OTEL_SERVICE_NAME (default judge-worker)
+
+## Bộ test trong /test_case
+Bài không có checker: thư mục bộ test giữ 0700, chỉ root của sandbox đọc được. Bài có checker (`"spj": true` trong
+`info`): thư mục và các `*.in` thuộc group 12003 (user `spj` của qduoj chạy checker), 0750 / 0640; `*.out` và `info`
+0600. Bài nộp chạy với user `code` (12002), không đọc được gì trong bộ test. Vì vậy worker phải ở trong group 12003:
+compose đặt `group_add: ["12003"]`; chạy ngoài compose thì `docker run --group-add 12003`.

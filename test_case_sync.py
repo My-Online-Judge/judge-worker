@@ -1,4 +1,5 @@
 import errno
+import json
 import logging
 import os
 import shutil
@@ -23,12 +24,31 @@ def _safe_extract_zip(zip_path, dest_dir):
         zf.extractall(dest_dir)
 
 
-def _open_to_every_user(bundle_dir):
-    """Set the modes qduoj's checker needs, whatever the umask: the checker runs as its own user (spj, uid 12003) and
-    opens argv[1] = <bundle_dir>/<n>.in itself, while mkdtemp made the directory 0700. Bundles are flat files."""
+# qduoj's checker user spj (uid 12003) has primary group 12003; a submission runs as code (uid 12002), which is not in
+# that group. The worker joins it (compose group_add), so it may give its own files to the group.
+SPJ_GID = 12003
+
+
+def _is_checker_bundle(bundle_dir):
+    """True when info says "spj": true (problem-service writes it for a problem with a checker)."""
+    with open(os.path.join(bundle_dir, "info"), encoding="utf-8") as f:
+        return bool(json.load(f).get("spj"))
+
+
+def _share_inputs_with_the_checker(bundle_dir):
+    """Let qduoj's checker read the inputs and nothing else, whatever the umask. The checker runs as spj and opens
+    argv[1] = <bundle_dir>/<n>.in itself, so the directory and each *.in go to group spj (0750, 0640). The expected
+    outputs and info stay the owner's (0600): root reads them in the sandbox, through DAC_OVERRIDE, and a submission
+    (code, not in group spj) reads none of the bundle. Bundles are flat files."""
     for name in os.listdir(bundle_dir):
-        os.chmod(os.path.join(bundle_dir, name), 0o644)
-    os.chmod(bundle_dir, 0o755)
+        path = os.path.join(bundle_dir, name)
+        if name.endswith(".in"):
+            os.chown(path, -1, SPJ_GID)
+            os.chmod(path, 0o640)
+        else:
+            os.chmod(path, 0o600)
+    os.chown(bundle_dir, -1, SPJ_GID)
+    os.chmod(bundle_dir, 0o750)
 
 
 def _default_client():
@@ -73,7 +93,9 @@ def ensure_present(test_case_id, cache_root=None, client=None, bucket=None):
         client.fget_object(bucket, key, tmp_zip)
         _safe_extract_zip(tmp_zip, tmp_dir)
         os.remove(tmp_zip)
-        _open_to_every_user(tmp_dir)
+        # A bundle without a checker keeps mkdtemp's 0700 directory: only root reads it in the sandbox.
+        if _is_checker_bundle(tmp_dir):
+            _share_inputs_with_the_checker(tmp_dir)
         try:
             os.replace(tmp_dir, dest)  # atomic install
         except OSError as e:
