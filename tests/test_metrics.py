@@ -2,7 +2,6 @@ import shutil
 import socket
 import ssl
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,15 +50,20 @@ def scrape_as_probe(port, timeout=5):
 def test_metrics_server_requires_client_cert(tls_dir):
     port = start_tls_metrics(tls_dir)
     sandbox_health.mark("http://judge-server:8080", True)
-    url = f"https://127.0.0.1:{port}/metrics"
 
-    # TLS 1.3 reports a missing client certificate after the handshake: the server's certificate_required alert, or
-    # the reset that cuts the request off when it lands first. (Not any error: a plaintext server fails differently.)
+    # TLS 1.3 reports a missing client certificate after the handshake, so it shows on the first request: the server's
+    # certificate_required alert on the read, or, when the server's close (a reset: the request was never read) lands
+    # before the request is written, an EOF on the write (CPython reports a failed SSL_write with an empty OpenSSL
+    # error queue as SSLEOFError; a reset read surfaces as ConnectionResetError). The handshake itself must succeed:
+    # a plaintext server fails there, before any request is sent.
     no_cert = ssl.create_default_context(cafile=FIXTURES / "ca.crt")
-    with pytest.raises(OSError) as refused:
-        urllib.request.urlopen(url, context=no_cert, timeout=5).read()
-    error = refused.value.reason if isinstance(refused.value, urllib.error.URLError) else refused.value
-    assert (isinstance(error, ConnectionResetError)
+    with no_cert.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5),
+                             server_hostname="localhost") as client:
+        with pytest.raises((ssl.SSLError, ConnectionError)) as refused:
+            client.sendall(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            client.recv(1)
+    error = refused.value
+    assert (isinstance(error, (ssl.SSLEOFError, ConnectionError))
             or getattr(error, "reason", "") == "TLSV13_ALERT_CERTIFICATE_REQUIRED")
 
     with scrape_as_probe(port) as response:
