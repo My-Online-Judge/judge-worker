@@ -24,12 +24,20 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 - JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
   quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Không retry
   khi ReadTimeout (sandbox có thể đang chấm) hay lỗi chứng chỉ TLS (cấu hình sai, không tự khỏi)
-- METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total
+- METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total, oj_run_expired_total
 - SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker chuyển `/ping` của
   từng sandbox về registry thay cho sandbox (sandbox ở mạng internal, không tới được submission-service);
   không đặt thì tắt. SANDBOX_HEARTBEAT_INTERVAL_SECONDS (default 10)
 - OTEL_EXPORTER_OTLP_ENDPOINT (vd http://jaeger:4318) — bật tracing (OTLP/HTTP); không đặt thì tracing tắt hoàn toàn
-- OTEL_SERVICE_NAME (default judge-worker)
+- OTEL_SERVICE_NAME (default judge-worker) — tên service trong Jaeger; `run-worker` đặt tên riêng của nó
+
+## Làn Run (Run code design §8)
+Một record có `runId` + `test_case` (không có `test_case_id`) là một *run*: worker không đồng bộ bundle, không báo
+`submission.started`, gửi `test_case` thẳng cho sandbox và trả verdict lên `JUDGED_TOPIC` dưới `runId` (cùng envelope với
+`submission.judged`). Run có `expiresAt` (epoch ms) đã qua thì bị bỏ qua và đếm ở `oj_run_expired_total` — sau một
+đợt làn Run gián đoạn, hàng đợi cũ được dọn ngay thay vì chấm cho không ai. Compose chạy service `run-worker` từ chính
+image này với `REQUESTED_TOPIC=run.requested JUDGED_TOPIC=run.judged CONSUMER_GROUP=run-workers OTEL_SERVICE_NAME=run-worker`
+và `JUDGE_INFRA_RETRY_SECONDS=30`, không MinIO, không heartbeat relay.
 
 ## Bộ test trong /test_case
 Bài không có checker: thư mục bộ test giữ 0700, chỉ root của sandbox đọc được. Bài có checker (`"spj": true` trong

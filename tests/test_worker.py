@@ -470,3 +470,65 @@ def test_run_commits_only_after_the_retried_verdict():
         < names.index("consumer.commit")
     assert consumer.poll.call_args.kwargs == {"timeout_ms": 2000}
     assert names.count("consumer.commit") == 1
+
+
+# ---- the Run lane (Run code design §8): a record named by runId, with inline cases and a deadline ----------------------
+
+def _run_cfg():
+    return MagicMock(JUDGED_TOPIC="run.judged", JUDGE_TIMEOUT_SECONDS=30, PUBLISH_TIMEOUT_SECONDS=10)
+
+
+def test_a_run_verdict_is_keyed_and_named_by_its_run_id():
+    producer = MagicMock()
+    with patch("worker.process_event", return_value={"runId": "r2", "status": 0}):
+        worker.handle_one({"runId": "r2", "test_case": []}, _run_cfg(), producer)
+    producer.send.assert_called_once_with("run.judged", key="r2", value={"runId": "r2", "status": 0}, headers=ANY)
+
+
+def test_an_expired_run_is_skipped_and_counted():
+    producer = MagicMock()
+    before = REGISTRY.get_sample_value("oj_run_expired_total") or 0
+    with patch("worker.process_event") as judge:
+        worker.handle_one({"runId": "r3", "test_case": [], "expiresAt": 1_000}, _run_cfg(), producer, now_ms=2_000)
+    judge.assert_not_called()
+    producer.send.assert_not_called()
+    assert REGISTRY.get_sample_value("oj_run_expired_total") == before + 1
+
+
+def test_a_run_still_inside_its_deadline_is_judged():
+    producer = MagicMock()
+    with patch("worker.process_event", return_value={"runId": "r4", "status": 0}) as judge:
+        worker.handle_one({"runId": "r4", "test_case": [], "expiresAt": 3_000}, _run_cfg(), producer, now_ms=2_000)
+    judge.assert_called_once()
+    producer.send.assert_called_once()
+
+
+def test_a_submission_without_a_deadline_is_never_expired():
+    producer = MagicMock()
+    with patch("worker.process_event", return_value={"submissionId": "s", "status": 0}) as judge:
+        worker.handle_one({"submissionId": "s"}, _run_cfg(), producer, now_ms=10**15)
+    judge.assert_called_once()
+    producer.send.assert_called_once_with("run.judged", key="s", value={"submissionId": "s", "status": 0},
+                                          headers=ANY)
+
+
+def test_a_run_that_fails_to_judge_answers_a_system_error_under_its_run_id():
+    producer = MagicMock()
+    with patch("worker.process_event", side_effect=RuntimeError("boom")):
+        worker.handle_one({"runId": "r5", "test_case": []}, _run_cfg(), producer)
+    value = producer.send.call_args.kwargs["value"]
+    assert value["runId"] == "r5"
+    assert "submissionId" not in value
+    assert value["status"] == verdict.SYSTEM_ERROR
+    assert producer.send.call_args.kwargs["key"] == "r5"
+
+
+def test_a_run_verdict_kafka_refuses_for_good_is_replaced_under_its_run_id():
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = [MessageSizeTooLargeError(), None]
+    with patch("worker.process_event", return_value={"runId": "r6", "status": 0, "details": [{"output": "x"}]}):
+        worker.handle_one({"runId": "r6", "test_case": []}, _run_cfg(), producer, wait=lambda s: None)
+    replacement = producer.send.call_args_list[1].kwargs["value"]
+    assert replacement["runId"] == "r6"
+    assert "submissionId" not in replacement
+    assert replacement["status"] == verdict.SYSTEM_ERROR

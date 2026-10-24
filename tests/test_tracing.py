@@ -88,3 +88,16 @@ def test_init_tracing_is_a_no_op_without_an_endpoint(monkeypatch):
     before = trace.get_tracer_provider()
     assert tracing.init_tracing() is False
     assert trace.get_tracer_provider() is before
+
+
+def test_init_tracing_names_the_service_from_otel_service_name(monkeypatch):
+    # The run-worker is the judge-worker image under another name (Run code design §8): its spans must say so.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "run-worker")
+    with patch("opentelemetry.sdk.trace.TracerProvider") as provider, \
+         patch("opentelemetry.sdk.trace.export.BatchSpanProcessor"), \
+         patch("opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter"), \
+         patch("opentelemetry.instrumentation.requests.RequestsInstrumentor"), \
+         patch("tracing.trace.set_tracer_provider"):
+        assert tracing.init_tracing() is True
+    assert provider.call_args.kwargs["resource"].attributes["service.name"] == "run-worker"

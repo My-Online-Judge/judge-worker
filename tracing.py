@@ -13,14 +13,18 @@ from opentelemetry.propagate import extract, inject
 _TRACER_NAME = "judge-worker"
 
 
-def init_tracing(service_name="judge-worker"):
+def init_tracing(service_name=None):
     """Export spans over OTLP/HTTP when OTEL_EXPORTER_OTLP_ENDPOINT is set; otherwise do nothing.
+
+    The service is named by OTEL_SERVICE_NAME (default judge-worker): the run-worker is this same image under
+    another name (Run code design §8), and its spans must say so in Jaeger.
 
     Returns True when tracing was enabled. Export is batched on a background thread, so a slow or
     missing collector never blocks judging — spans that cannot be sent are dropped.
     """
     if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         return False
+    service_name = service_name or os.getenv("OTEL_SERVICE_NAME", "judge-worker")
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
     from opentelemetry.sdk.resources import Resource

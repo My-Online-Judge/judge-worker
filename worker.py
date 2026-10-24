@@ -9,9 +9,13 @@ from prometheus_client import Counter
 
 import infra_errors
 import tracing
-from handler import process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
+from handler import job_identity, process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
 
 log = logging.getLogger("judge-worker")
+
+# A run (Run code design §8) names the instant after which nobody waits for it; one picked up later is skipped, so a
+# backlog left by a run-lane outage is cleared at once instead of being judged into the void.
+RUN_EXPIRED = Counter("oj_run_expired", "Runs skipped because their caller had stopped waiting")
 
 # Sub-project 7 §3.2: a verdict Kafka did not take is sent again until it does — never dropped, never judged again,
 # and never a reason to exit (an exit cost a Docker restart back-off and a consumer-group rebalance).
@@ -62,12 +66,13 @@ def safe_json_deserialize(b):
         return None
 
 
-def publish_until_sent(producer, config, submission_id, judged, headers, wait):
+def publish_until_sent(producer, config, submission_id, judged, headers, wait, id_key="submissionId"):
     """Send the verdict until Kafka acknowledges it. A KafkaError — Kafka away, no metadata, no acknowledgement in
     time — is logged, counted, and the same verdict sent again after wait(seconds). A record the broker refuses for
     good (a non-retriable broker answer, e.g. MessageSizeTooLargeError: the verdict carries the program's whole
     output) is replaced once by a SYSTEM_ERROR without details but with the verdict's rejudgeCount, as when judging
-    itself fails; if that is refused too, it propagates. Anything else is a bug: it propagates."""
+    itself fails, named as the request was (id_key); if that is refused too, it propagates. Anything else is a bug:
+    it propagates."""
     replaced = False
     for delay in backoff_delays():
         try:
@@ -79,9 +84,9 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait):
             if isinstance(exc, BrokerResponseError) and not exc.retriable:
                 if replaced:
                     raise
-                log.error("Kafka refused the verdict of submission %s for good (%r); sending a SYSTEM_ERROR instead",
+                log.error("Kafka refused the verdict of %s for good (%r); sending a SYSTEM_ERROR instead",
                           submission_id, exc)
-                replacement = system_error_event(submission_id, f"verdict not publishable: {exc!r}")
+                replacement = system_error_event(submission_id, f"verdict not publishable: {exc!r}", id_key=id_key)
                 judged, replaced = {**replacement, **generation_of(judged)}, True
                 continue
             log.warning("Verdict of submission %s not published (%r); sending it again in %d s",
@@ -112,7 +117,7 @@ def judge_with_infra_retry(event, config, on_started, wait):
     2 s, 4 s … 60 s, until JUDGE_INFRA_RETRY_SECONDS would be exceeded: then a SYSTEM_ERROR. wait is run()'s
     pause/poll/seek, so nothing is committed meanwhile and the group keeps the partition. Any other failure is a
     SYSTEM_ERROR at once."""
-    submission_id = event["submissionId"]
+    id_key, submission_id = job_identity(event)
     began = time.monotonic()
     delays = infra_errors.infra_delays()
     while True:
@@ -121,41 +126,52 @@ def judge_with_infra_retry(event, config, on_started, wait):
         except Exception as exc:  # judge-server down / timeout / bad response
             reason = infra_errors.transient_reason(exc)
             if reason is None:
-                log.exception("Judging failed for submission %s", submission_id)
-                return system_error_event(submission_id, str(exc))
+                log.exception("Judging failed for %s", submission_id)
+                return system_error_event(submission_id, str(exc), id_key=id_key)
             delay = next(delays)
             if time.monotonic() - began + delay > config.JUDGE_INFRA_RETRY_SECONDS:
-                log.error("Judge infrastructure (%s) still unavailable for submission %s after %.0f s (%r); giving up",
+                log.error("Judge infrastructure (%s) still unavailable for %s after %.0f s (%r); giving up",
                           reason, submission_id, time.monotonic() - began, exc)
-                return system_error_event(submission_id, infra_errors.GIVE_UP_MESSAGE)
+                return system_error_event(submission_id, infra_errors.GIVE_UP_MESSAGE, id_key=id_key)
             infra_errors.INFRA_RETRIES.labels(reason).inc()
             log.warning("Judge infrastructure (%s) unavailable for submission %s (%r); judging again in %d s",
                         reason, submission_id, exc, delay)
             wait(delay)
 
 
-def handle_one(event, config, producer, headers=None, wait=time.sleep):
+def is_expired(event, now_ms):
+    """True for a run whose expiresAt (epoch ms) has passed; a record without one (a submission) never expires."""
+    expires_at = event.get("expiresAt")
+    return expires_at is not None and now_ms > expires_at
+
+
+def handle_one(event, config, producer, headers=None, wait=time.sleep, now_ms=None):
     if event is None:
         log.error("Skipping malformed (non-JSON) message")
         return
-    submission_id = event.get("submissionId")
-    if not submission_id:
-        log.error("Received event without submissionId, skipping: %r", event)
+    identity = job_identity(event)
+    if identity is None:
+        log.error("Received event without submissionId or runId, skipping: %r", event)
+        return
+    id_key, submission_id = identity
+    if is_expired(event, time.time() * 1000 if now_ms is None else now_ms):
+        log.info("Skipping run %s: its caller stopped waiting at %s", submission_id, event.get("expiresAt"))
+        RUN_EXPIRED.inc()
         return
     # Continue the trace submission-service started (its Kafka record carries `traceparent`), so one
-    # submission is a single trace from HTTP submit to stored verdict.
+    # submission (or run) is a single trace from the HTTP request to the stored verdict (or the reply).
     with tracing.tracer().start_as_current_span(
-            "judge submission",
+            "judge submission" if id_key == "submissionId" else "judge run",
             context=tracing.context_from_headers(headers),
             kind=SpanKind.CONSUMER,
-            attributes={"oj.submission_id": submission_id}) as span:
+            attributes={"oj.submission_id" if id_key == "submissionId" else "oj.run_id": submission_id}) as span:
         generation = generation_of(event)
         judged = judge_with_infra_retry(
             event, config, lambda: publish_started(producer, config, submission_id, generation), wait)
         judged = {**judged, **generation}  # every verdict, a SYSTEM_ERROR included, names the request's generation
         span.set_attribute("oj.verdict_status", judged.get("status"))
         publish_until_sent(producer, config, submission_id, judged,
-                           tracing.headers_from_current_context(), wait)
+                           tracing.headers_from_current_context(), wait, id_key=id_key)
 
 
 def run(config, consumer, producer):
