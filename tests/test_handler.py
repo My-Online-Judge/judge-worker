@@ -89,3 +89,50 @@ def test_checker_requests_get_the_compile_allowance():
         handler.process_event(checker, Cfg)
         handler.process_event(plain, Cfg)
     assert [(c.args[2].get("spj_version"), c.kwargs["timeout"]) for c in m.call_args_list] == [("ab12", 50), (None, 30)]
+
+
+class _Cfg:
+    JUDGE_SERVER_URLS = ["http://js1:8080"]
+    JUDGE_SERVER_TOKEN = "t"
+    JUDGE_TIMEOUT_SECONDS = 30
+    SPJ_COMPILE_ALLOWANCE_SECONDS = 20
+
+
+def test_job_identity_prefers_the_submission_id_then_the_run_id():
+    assert handler.job_identity({"submissionId": "s1", "runId": "r1"}) == ("submissionId", "s1")
+    assert handler.job_identity({"runId": "r1"}) == ("runId", "r1")
+    assert handler.job_identity({"submissionId": ""}) is None
+    assert handler.job_identity({}) is None
+
+
+def test_an_inline_run_neither_syncs_a_bundle_nor_announces_a_start():
+    from unittest.mock import MagicMock
+    event = {"runId": "r9", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
+             "test_case": [{"input": "1\n", "output": "1\n"}], "output": True}
+    on_started = MagicMock()
+    with patch("handler.ensure_present") as ensure, patch("handler.maybe_sweep") as sweep, \
+         patch("handler.dispatch_judge", return_value={"err": None, "data": [
+             {"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1, "test_case": "1"}]}) as m:
+        out = handler.process_event(event, _Cfg, on_started=on_started)
+    ensure.assert_not_called()
+    sweep.assert_not_called()
+    on_started.assert_not_called()
+    assert m.call_args.args[2]["test_case"] == event["test_case"]
+    assert "test_case_id" not in m.call_args.args[2]
+    assert out["runId"] == "r9"
+    assert "submissionId" not in out
+    assert out["status"] == verdict.ACCEPTED
+
+
+def test_a_submission_still_syncs_its_bundle_and_announces_its_start():
+    from unittest.mock import MagicMock
+    event = {"submissionId": "sub-9", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
+             "test_case_id": "p", "output": True}
+    on_started = MagicMock()
+    with patch("handler.ensure_present") as ensure, patch("handler.maybe_sweep"), \
+         patch("handler.dispatch_judge", return_value={"err": None, "data": []}):
+        out = handler.process_event(event, _Cfg, on_started=on_started)
+    ensure.assert_called_once_with("p")
+    on_started.assert_called_once()
+    assert out["submissionId"] == "sub-9"
+    assert "runId" not in out

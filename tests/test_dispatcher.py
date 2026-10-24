@@ -263,3 +263,14 @@ def test_dispatches_are_counted_by_sandbox_and_outcome(mock_call):
     dispatcher.dispatch_judge([A, B], "t", {}, timeout=5)
     assert dispatches("b", "ok") == ok_b + 1
     assert dispatches("a", "failed") == failed_a + 1
+
+
+def test_build_judge_body_sends_inline_cases_instead_of_a_bundle():
+    # A run (Run code design §8): the cases travel in the request, so qduoj's judge() gets test_case and no test_case_id.
+    event = {**_PLAIN_EVENT, "runId": "r1",
+             "test_case": [{"input": "1 2\n", "output": "3\n"}, {"input": "5\n", "output": ""}]}
+    del event["test_case_id"]
+    body = dispatcher.build_judge_body(event)
+    assert body["test_case"] == event["test_case"]
+    assert "test_case_id" not in body
+    assert body["output"] is True

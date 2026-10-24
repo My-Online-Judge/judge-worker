@@ -10,7 +10,7 @@ import tls
 
 log = logging.getLogger("judge-worker")
 
-_JUDGE_BODY_FIELDS = ("src", "language_config", "max_cpu_time", "max_memory", "test_case_id")
+_JUDGE_BODY_FIELDS = ("src", "language_config", "max_cpu_time", "max_memory")
 # A checker problem's checker, under the names qduoj's JudgeServer.judge takes (SP13). submission-service sends all four
 # or none.
 _SPJ_FIELDS = ("spj_version", "spj_config", "spj_compile_config", "spj_src")
@@ -34,6 +34,12 @@ def token_header(token):
 
 def build_judge_body(event):
     body = {field: event[field] for field in _JUDGE_BODY_FIELDS}
+    # A run carries its cases inline (Run code design §8: qduoj writes them into the run's own directory); a
+    # submission names the bundle the worker synced to the shared cache.
+    if "test_case" in event:
+        body["test_case"] = event["test_case"]
+    else:
+        body["test_case_id"] = event["test_case_id"]
     body["output"] = event.get("output", True)
     if event.get("spj_version"):
         body.update({field: event[field] for field in _SPJ_FIELDS})
