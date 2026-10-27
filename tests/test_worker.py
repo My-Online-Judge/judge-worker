@@ -2,8 +2,7 @@ import itertools
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
-from kafka.errors import (CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError,
-                          NoBrokersAvailable)
+from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError
 from kafka.structs import TopicPartition
 from urllib3.exceptions import MaxRetryError
 import requests
@@ -191,7 +190,8 @@ def test_a_failed_commit_does_not_stop_the_worker():
 
 
 def test_connect_waits_for_a_broker_instead_of_exiting():
-    build = MagicMock(side_effect=[NoBrokersAvailable(), NoBrokersAvailable(), "consumer"])
+    unreachable = KafkaTimeoutError("Unable to bootstrap from ['kafka:9092']")
+    build = MagicMock(side_effect=[unreachable, unreachable, "consumer"])
     slept = []
     assert worker.connect(build, "cfg", sleep=slept.append) == "consumer"
     assert slept == [1, 2]
@@ -205,7 +205,7 @@ def test_connect_does_not_retry_a_tls_misconfiguration(tls_dir):
 
     def build(cfg):
         calls.append(cfg)
-        # a retry would get a client here, so an except widened past NoBrokersAvailable fails this test, not hangs it
+        # a retry would get a client here, so an except widened past KafkaTimeoutError fails this test, not hangs it
         return tls.kafka_kwargs() if len(calls) == 1 else "consumer"
 
     with pytest.raises(RuntimeError, match="tls.key"):

@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from kafka.errors import BrokerResponseError, KafkaError, NoBrokersAvailable
+from kafka.errors import BrokerResponseError, KafkaError, KafkaTimeoutError
 from opentelemetry.trace import SpanKind
 from prometheus_client import Counter
 
@@ -45,7 +45,8 @@ def connect(build, config, sleep=time.sleep):
     for delay in backoff_delays():
         try:
             return build(config)
-        except NoBrokersAvailable:
+        except KafkaTimeoutError:
+            # kafka-python 3 gives up bootstrapping with "Unable to bootstrap" (2.x raised NoBrokersAvailable).
             log.warning("No Kafka broker answers; trying again in %d s", delay)
             sleep(delay)
 
