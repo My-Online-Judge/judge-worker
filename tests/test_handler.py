@@ -193,3 +193,14 @@ def test_an_unreadable_bundle_info_does_not_fail_a_complete_judgement(monkeypatc
     out = handler.process_event(event, type("C", (), {"JUDGE_TIMEOUT_SECONDS": 30, "SPJ_COMPILE_ALLOWANCE_SECONDS": 20,
                                                      "JUDGE_SERVER_URLS": ["u"], "JUDGE_SERVER_TOKEN": "t"}))
     assert out["status"] == verdict.ACCEPTED                # count unknown: only an empty array is refused
+
+
+def test_every_verdict_names_the_worker_that_judged_it(monkeypatch):
+    import config
+    monkeypatch.setattr(config.Config, "WORKER_ID", "judge-abc12")
+    ok = {"err": None, "data": [{"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}]}
+    assert handler.build_judged_event("s", ok)["judgedBy"] == "judge-abc12"
+    assert handler.build_judged_event("s", {"err": "CompileError", "data": "x"})["judgedBy"] == "judge-abc12"
+    assert handler.build_judged_event("s", {"err": None, "data": None})["judgedBy"] == "judge-abc12"   # malformed
+    assert handler.system_error_event("s", "boom")["judgedBy"] == "judge-abc12"
+    assert handler.system_error_event("r", "boom", id_key="runId")["judgedBy"] == "judge-abc12"

@@ -13,9 +13,9 @@ from shutdown import Shutdown
 from worker import connect, safe_json_deserialize, serve
 
 _handler = logging.StreamHandler()
-_handler.addFilter(SubmissionIdFilter())
+_handler.addFilter(SubmissionIdFilter(worker=Config.WORKER_ID))
 _handler.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s [%(submission_id)s] %(name)s: %(message)s"))
+    "%(asctime)s %(levelname)s [%(submission_id)s] worker=%(worker)s %(name)s: %(message)s"))
 logging.basicConfig(level=logging.INFO, handlers=[_handler])
 
 

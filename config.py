@@ -34,7 +34,9 @@ class Config:
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
     # Announced just before each dispatch (sub-project 11): submission-service starts its judging-timeout clock then.
     STARTED_TOPIC = os.getenv("STARTED_TOPIC", "submission.started")
-    WORKER_ID = os.getenv("WORKER_ID", socket.gethostname())
+    # Who judged: the Kubernetes pod name (Downward API POD_NAME) when there is one, so a verdict, a log line and a start
+    # event name the pod that produced them; else WORKER_ID, else the container's hostname (compose).
+    WORKER_ID = os.getenv("POD_NAME") or os.getenv("WORKER_ID") or socket.gethostname()
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
     # Added to that timeout for a request that carries a checker (SP13): qduoj compiles the checker inside the first

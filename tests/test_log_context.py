@@ -42,3 +42,17 @@ def test_process_event_sets_and_resets_contextvar(monkeypatch):
     handler.process_event(event, Cfg())
     assert captured["during"] == "sub-9"   # set DURING processing
     assert submission_id_var.get() == "-"  # reset AFTER
+
+
+def test_filter_injects_the_worker_name():
+    from log_context import SubmissionIdFilter
+    rec = logging.LogRecord("n", logging.INFO, __file__, 1, "msg", None, None)
+    SubmissionIdFilter(worker="judge-abc12").filter(rec)
+    assert rec.worker == "judge-abc12"
+
+
+def test_filter_worker_defaults_to_dash():
+    from log_context import SubmissionIdFilter
+    rec = logging.LogRecord("n", logging.INFO, __file__, 1, "msg", None, None)
+    SubmissionIdFilter().filter(rec)
+    assert rec.worker == "-"

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 
+import config
 import verdict
 from event_limits import limit_event
 from dispatcher import build_judge_body, dispatch_judge
@@ -71,6 +72,8 @@ def _event(submission_id, status, result, cpu, real, mem, error_message, details
         "memory": mem,
         "error_message": error_message,
         "details": details,
+        # The worker (the pod, under Kubernetes) that judged it: an audit trail for a pod with a bad disk or sandbox.
+        "judgedBy": config.Config.WORKER_ID,
     })
 
 

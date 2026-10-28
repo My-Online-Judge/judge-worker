@@ -137,3 +137,18 @@ def test_validate_requires_token(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(config)  # later tests get the session's token back
+
+
+def test_worker_id_prefers_pod_name_then_worker_id_then_hostname(monkeypatch):
+    import socket
+    monkeypatch.setenv("POD_NAME", "judge-7c9f-abcde")
+    monkeypatch.setenv("WORKER_ID", "w-explicit")
+    import config
+    importlib.reload(config)
+    assert config.Config.WORKER_ID == "judge-7c9f-abcde"
+    monkeypatch.delenv("POD_NAME")
+    importlib.reload(config)
+    assert config.Config.WORKER_ID == "w-explicit"
+    monkeypatch.delenv("WORKER_ID")
+    importlib.reload(config)
+    assert config.Config.WORKER_ID == socket.gethostname()
