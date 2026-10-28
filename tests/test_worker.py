@@ -646,3 +646,16 @@ def test_wait_polls_in_one_second_slices_and_stops_early_on_shutdown():
     assert all(c.kwargs == {"timeout_ms": 1000} for c in consumer.poll.call_args_list)
     assert producer.send.return_value.get.call_count == 3  # the verdict was still delivered
     assert consumer.commit.call_count == 1
+
+
+def test_a_minio_slowdown_during_the_bundle_sync_is_retried_then_judged():
+    from minio.error import S3Error
+    slow = S3Error(response=type("R", (), {"status": 503})(), code="SlowDown", message="busy", resource="/b",
+                   request_id="r", host_id="h")
+    producer, waits, before = MagicMock(), [], infra_retries("minio")
+    outcomes = [slow, {"submissionId": "s40", "status": 0}]
+    with patch("worker.process_event", side_effect=outcomes):
+        worker.handle_one({"submissionId": "s40"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == [2]                                    # waited via run()'s poll-keeping wait, then judged again
+    assert producer.send.call_args.kwargs["value"]["status"] == 0
+    assert infra_retries("minio") - before == 1

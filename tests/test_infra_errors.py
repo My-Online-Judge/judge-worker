@@ -19,6 +19,12 @@ def s3_error():
     return S3Error("NoSuchKey", "missing", "r", "req", "host", None)
 
 
+def s3_error_with_status(code, status):
+    # keyword arguments: minio-py puts `response` first, and the names are stable across versions
+    return S3Error(response=type("R", (), {"status": status})(), code=code, message="msg", resource="r",
+                   request_id="req", host_id="host")
+
+
 @pytest.mark.parametrize("exc, reason", [
     (requests.ReadTimeout(), None),                      # the sandbox may still be judging: a retry could judge twice
     (requests.ConnectionError(), "sandbox"),
@@ -34,6 +40,9 @@ def s3_error():
     (InvalidResponseError(502, "text/html", "body"), "minio"),
     (InvalidResponseError(200, "text/html", "body"), None),
     (s3_error(), None),
+    (s3_error_with_status("SlowDown", 503), "minio"),      # MinIO answering "slow down" is the store being busy
+    (s3_error_with_status("InternalError", 500), "minio"),
+    (s3_error_with_status("NoSuchKey", 404), None),         # a bundle that is not there does not heal by waiting
     (ValueError("x"), None),
 ])
 def test_transient_reason(exc, reason):

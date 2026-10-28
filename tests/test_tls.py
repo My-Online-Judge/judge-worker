@@ -78,9 +78,12 @@ def test_minio_http_client_configured(tls_dir):
 
     # MinIO verified against the CA, the worker's certificate presented.
     assert (kw["cert_reqs"], kw["ca_certs"], kw["cert_file"], kw["key_file"]) == ("CERT_REQUIRED", ca, cert, key)
-    # Otherwise minio-py's own pool: its timeouts, pool size and retries.
+    # minio-py's own pool size and retry pacing, but shorter timeouts and fewer retries (config.MINIO_TIMEOUT_SECONDS,
+    # MINIO_RETRIES): the MinIO sync is a stretch with no poll(), so it must fit the consumer's poll interval.
     assert (kw["timeout"].connect_timeout, kw["timeout"].read_timeout) == (
-        default["timeout"].connect_timeout, default["timeout"].read_timeout)
+        config.Config.MINIO_TIMEOUT_SECONDS, config.Config.MINIO_TIMEOUT_SECONDS)
+    assert config.Config.MINIO_TIMEOUT_SECONDS < default["timeout"].read_timeout
     assert kw["maxsize"] == default["maxsize"]
-    assert (kw["retries"].total, kw["retries"].backoff_factor, kw["retries"].status_forcelist) == (
-        default["retries"].total, default["retries"].backoff_factor, default["retries"].status_forcelist)
+    assert kw["retries"].total == config.Config.MINIO_RETRIES
+    assert (kw["retries"].backoff_factor, kw["retries"].status_forcelist) == (
+        default["retries"].backoff_factor, default["retries"].status_forcelist)

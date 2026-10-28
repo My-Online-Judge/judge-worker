@@ -1,5 +1,5 @@
 """Which judging failures are the infrastructure's, and so worth waiting out (sub-project 11)."""
-from minio.error import InvalidResponseError, ServerError
+from minio.error import InvalidResponseError, S3Error, ServerError
 import requests
 import urllib3.exceptions as u3
 from prometheus_client import Counter
@@ -44,6 +44,9 @@ def transient_reason(exc):
         return "minio"
     if isinstance(exc, ServerError):
         return "minio" if exc.status_code >= 500 else None
+    if isinstance(exc, S3Error):  # MinIO answered with an error document: its own 5xx (SlowDown, InternalError) is a busy
+        status = getattr(getattr(exc, "response", None), "status", None)  # store; a 4xx (NoSuchKey) will not heal
+        return "minio" if status is not None and status >= 500 else None
     if isinstance(exc, InvalidResponseError):
         code = getattr(exc, "_code", None)  # minio 7.2.7 keeps the response code private
         return "minio" if code is not None and code >= 500 else None

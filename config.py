@@ -58,11 +58,13 @@ class Config:
     # Judging is slow and blocking, so fetch a single submission per poll: a large batch would
     # make the gap between poll() calls exceed max.poll.interval.ms and get us evicted mid-judge.
     MAX_POLL_RECORDS = _int_env("MAX_POLL_RECORDS", 1)
-    # Give one (slowest) judge, a checker's compile included, plus a 30s margin (compile, judge-server round-trip,
-    # delivery ack) before Kafka decides we are stuck and rebalances our partitions away.
-    MAX_POLL_INTERVAL_MS = _int_env(
-        "MAX_POLL_INTERVAL_MS", (JUDGE_TIMEOUT_SECONDS + SPJ_COMPILE_ALLOWANCE_SECONDS) * 1000 + 30000
-    )
+    # Before Kafka decides we are stuck and rebalances our partitions away (a second worker then judges the same
+    # submission). process_event is one stretch with no poll(): the MinIO sync (up to MINIO_TIMEOUT_SECONDS per try,
+    # MINIO_RETRIES + 1 tries) and then one judge per sandbox when a failover happens (JUDGE_TIMEOUT_SECONDS plus a
+    # checker's compile each). With the defaults that is about 3 x 60 + 2 x 50 = 280 s; 10 minutes leaves room for a
+    # slow node. The waits for Kafka, MinIO or a sandbox that is away poll() in 1 s slices (worker.run), so they do not
+    # count against this.
+    MAX_POLL_INTERVAL_MS = _int_env("MAX_POLL_INTERVAL_MS", 600000)
     # Liveness heartbeat runs on a background thread (independent of poll); keep the heartbeat
     # comfortably below the session timeout as Kafka requires.
     SESSION_TIMEOUT_MS = _int_env("SESSION_TIMEOUT_MS", 30000)
@@ -73,6 +75,11 @@ class Config:
     MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
     MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
     MINIO_BUCKET = os.getenv("MINIO_BUCKET", "test-cases")
+    # One MinIO request's connect and read timeout, and how many times urllib3 retries it (so a try takes at most
+    # MINIO_TIMEOUT_SECONDS x (MINIO_RETRIES + 1)). minio-py's own 5 min x 6 would hold the consumer past its poll
+    # interval in a MinIO brownout; a failure beyond this is retried by judge_with_infra_retry, which polls meanwhile.
+    MINIO_TIMEOUT_SECONDS = _int_env("MINIO_TIMEOUT_SECONDS", 60)
+    MINIO_RETRIES = _int_env("MINIO_RETRIES", 2)
     # Shared volume the sandbox mounts at /test_case; the worker syncs bundles here before judging.
     TEST_CASE_CACHE_DIR = os.getenv("TEST_CASE_CACHE_DIR", "/test_case")
     # Age-based GC of the cache volume: evict installed bundle dirs unused for this long...

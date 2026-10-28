@@ -10,21 +10,37 @@ RUNTIME_ERROR = 4
 SYSTEM_ERROR = 5
 
 
-def resolve_verdict(details):
+def incomplete_reason(details, expected_count=None):
+    """Why details cannot be a full judgement, or None. A sandbox that returns fewer results than the bundle has cases
+    (or none) has not judged the submission, so "no case failed" proves nothing: it must never read as ACCEPTED."""
+    if not details:
+        return "Judge returned 0 results"
+    if expected_count is not None and len(details) != expected_count:
+        return f"Judge returned {len(details)} of {expected_count} test case results"
+    return None
+
+
+def resolve_verdict(details, expected_count=None):
     """Resolve verdict from testcase details. The logic judge-api's resolveVerdict had; the worker now owns it.
 
     Rules (in order):
+    0. No results, or fewer than expected_count (the bundle's test_case_number, a run's inline cases) -> SYSTEM_ERROR
     1. Sandbox error (error != 0) anywhere -> SYSTEM_ERROR (overrides all)
-    2. First failing testcase (result != 0) wins
-    3. All pass -> ACCEPTED
+    2. A case without a result is not a pass -> SYSTEM_ERROR
+    3. First failing testcase (result != 0) wins
+    4. All pass -> ACCEPTED
     """
+    if incomplete_reason(details, expected_count):
+        return SYSTEM_ERROR
     verdict_code = ACCEPTED
     for item in details:
         error = item.get("error")
         if error is not None and error != 0:
             return SYSTEM_ERROR
         result = item.get("result")
-        if verdict_code == ACCEPTED and result is not None and result != 0:
+        if result is None:
+            return SYSTEM_ERROR
+        if verdict_code == ACCEPTED and result != 0:
             verdict_code = result
     return verdict_code
 

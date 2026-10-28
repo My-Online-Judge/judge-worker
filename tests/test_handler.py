@@ -63,7 +63,8 @@ def test_process_event_dispatches_to_judge_servers(monkeypatch):
         JUDGE_TIMEOUT_SECONDS = 30
 
     with patch("handler.ensure_present"), \
-         patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
+         patch("handler.dispatch_judge", return_value={"err": None, "data": [
+             {"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}]}) as m:
         out = handler.process_event(event, Cfg)
     m.assert_called_once()
     # process_event hands the full URL list to the dispatcher (which does round-robin/failover)
@@ -143,3 +144,52 @@ def test_a_submission_still_syncs_its_bundle_and_announces_its_start():
 @pytest.mark.parametrize("event", [[], 1, "x", None])
 def test_job_identity_of_a_non_object_event_is_none(event):
     assert handler.job_identity(event) is None
+
+
+def test_an_empty_result_array_is_a_system_error_with_a_reason():
+    out = handler.build_judged_event("s", {"err": None, "data": []})
+    assert out["status"] == verdict.SYSTEM_ERROR
+    assert "0 results" in out["error_message"]
+
+
+def test_fewer_results_than_the_bundle_has_cases_is_a_system_error_with_a_reason():
+    resp = {"err": None, "data": [{"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}]}
+    out = handler.build_judged_event("s", resp, expected_count=3)
+    assert out["status"] == verdict.SYSTEM_ERROR
+    assert "1 of 3" in out["error_message"]
+
+
+def _spy_dispatch(monkeypatch, results):
+    monkeypatch.setattr(handler, "maybe_sweep", lambda: None)
+    monkeypatch.setattr(handler, "dispatch_judge", lambda *a, **k: {"err": None, "data": results})
+
+
+def test_process_event_reads_the_case_count_from_the_synced_bundle(monkeypatch, tmp_path):
+    (tmp_path / "info").write_text('{"test_case_number": 2}')
+    monkeypatch.setattr(handler, "ensure_present", lambda tcid: str(tmp_path))
+    _spy_dispatch(monkeypatch, [{"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}])
+    event = {"submissionId": "s", "test_case_id": "p__h", "src": "x", "language_config": {}, "max_cpu_time": 1,
+             "max_memory": 1}
+    out = handler.process_event(event, type("C", (), {"JUDGE_TIMEOUT_SECONDS": 30, "SPJ_COMPILE_ALLOWANCE_SECONDS": 20,
+                                                     "JUDGE_SERVER_URLS": ["u"], "JUDGE_SERVER_TOKEN": "t"}))
+    assert out["status"] == verdict.SYSTEM_ERROR            # 1 result for a 2-case bundle
+
+
+def test_process_event_of_a_run_counts_its_inline_cases(monkeypatch):
+    _spy_dispatch(monkeypatch, [{"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}])
+    event = {"runId": "r", "test_case": [{"input": "1"}, {"input": "2"}], "src": "x", "language_config": {},
+             "max_cpu_time": 1, "max_memory": 1}
+    out = handler.process_event(event, type("C", (), {"JUDGE_TIMEOUT_SECONDS": 30, "SPJ_COMPILE_ALLOWANCE_SECONDS": 20,
+                                                     "JUDGE_SERVER_URLS": ["u"], "JUDGE_SERVER_TOKEN": "t"}))
+    assert out["runId"] == "r" and out["status"] == verdict.SYSTEM_ERROR
+
+
+def test_an_unreadable_bundle_info_does_not_fail_a_complete_judgement(monkeypatch, tmp_path):
+    (tmp_path / "info").write_text("not json")
+    monkeypatch.setattr(handler, "ensure_present", lambda tcid: str(tmp_path))
+    _spy_dispatch(monkeypatch, [{"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}])
+    event = {"submissionId": "s", "test_case_id": "p__h", "src": "x", "language_config": {}, "max_cpu_time": 1,
+             "max_memory": 1}
+    out = handler.process_event(event, type("C", (), {"JUDGE_TIMEOUT_SECONDS": 30, "SPJ_COMPILE_ALLOWANCE_SECONDS": 20,
+                                                     "JUDGE_SERVER_URLS": ["u"], "JUDGE_SERVER_TOKEN": "t"}))
+    assert out["status"] == verdict.ACCEPTED                # count unknown: only an empty array is refused

@@ -1,4 +1,7 @@
+import json
 import logging
+import os
+
 import verdict
 from event_limits import limit_event
 from dispatcher import build_judge_body, dispatch_judge
@@ -28,7 +31,7 @@ def job_identity(event):
     return None
 
 
-def build_judged_event(submission_id, judge_response, id_key="submissionId"):
+def build_judged_event(submission_id, judge_response, id_key="submissionId", expected_count=None):
     err = judge_response.get("err")
     data = judge_response.get("data")
 
@@ -44,7 +47,11 @@ def build_judged_event(submission_id, judge_response, id_key="submissionId"):
 
     # Case 2: per-testcase result array.
     if isinstance(data, list):
-        status = verdict.resolve_verdict(data)
+        incomplete = verdict.incomplete_reason(data, expected_count)
+        if incomplete:
+            log.error("Submission %s: %s", submission_id, incomplete)
+            return _event(submission_id, verdict.SYSTEM_ERROR, None, 0, 0, 0, incomplete, [], id_key)
+        status = verdict.resolve_verdict(data, expected_count)
         max_cpu, max_real, max_mem, first_fail = verdict.compute_stats(data)
         return _event(submission_id, status, first_fail,
                       max_cpu, max_real, max_mem, None, data, id_key)
@@ -72,6 +79,17 @@ def system_error_event(submission_id, message, id_key="submissionId"):
     return _event(submission_id, verdict.SYSTEM_ERROR, None, 0, 0, 0, message, [], id_key)
 
 
+def bundle_case_count(bundle_dir):
+    """The bundle's test_case_number, from the `info` file the problem service wrote, or None when it cannot be read
+    (the count is a cross-check, not a precondition: without it only an empty result array is refused)."""
+    try:
+        with open(os.path.join(bundle_dir, "info"), encoding="utf-8") as f:
+            count = json.load(f).get("test_case_number")
+    except (TypeError, OSError, ValueError, AttributeError):
+        return None
+    return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else None
+
+
 def process_event(event, config, on_started=None):
     key, job_id = job_identity(event) or ("submissionId", "-")
     token = submission_id_var.set(job_id)
@@ -80,9 +98,10 @@ def process_event(event, config, on_started=None):
         # announce (there is no submission row to move to JUDGING). A submission names its bundle.
         inline = "test_case" in event
         log.info("Judging %s %s", "run" if inline else "submission", job_id)
+        expected_count = len(event["test_case"]) if inline else None
         if not inline:
             maybe_sweep()  # rate-limited; prunes stale cached bundles
-            ensure_present(event["test_case_id"])
+            expected_count = bundle_case_count(ensure_present(event["test_case_id"]))
             if on_started is not None:
                 on_started()
         body = build_judge_body(event)
@@ -93,6 +112,6 @@ def process_event(event, config, on_started=None):
         judge_response = dispatch_judge(
             config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body, timeout=timeout,
         )
-        return build_judged_event(job_id, judge_response, id_key=key)
+        return build_judged_event(job_id, judge_response, id_key=key, expected_count=expected_count)
     finally:
         submission_id_var.reset(token)

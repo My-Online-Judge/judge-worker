@@ -35,7 +35,7 @@ def test_judge_timeout_seconds_good_value_is_parsed(monkeypatch):
 # --- T2-5: consumer poll / rebalance tuning ---
 
 def _reload_config_clean(monkeypatch, *keep):
-    for v in ("JUDGE_TIMEOUT_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
+    for v in ("JUDGE_TIMEOUT_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MINIO_TIMEOUT_SECONDS", "MINIO_RETRIES", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
               "SESSION_TIMEOUT_MS", "HEARTBEAT_INTERVAL_MS"):
         if v not in keep:
             monkeypatch.delenv(v, raising=False)
@@ -60,11 +60,25 @@ def test_max_poll_interval_scales_with_judge_timeout(monkeypatch):
     assert c.MAX_POLL_INTERVAL_MS >= 60 * 1000 + 30000
 
 
-def test_max_poll_interval_covers_the_allowance(monkeypatch):
+def test_max_poll_interval_default_is_ten_minutes(monkeypatch):
     c = _reload_config_clean(monkeypatch)
     assert c.SPJ_COMPILE_ALLOWANCE_SECONDS == 20
-    # One judge of a checker problem (30 s, plus 20 s to compile the checker) and the 30 s margin.
-    assert c.MAX_POLL_INTERVAL_MS == 80_000
+    assert c.MAX_POLL_INTERVAL_MS == 600_000
+
+
+def test_max_poll_interval_covers_one_attempt_that_does_not_poll(monkeypatch):
+    # process_event is one stretch with no poll(): the MinIO sync (connect or read timeout, each try) and then one
+    # judge per sandbox (a failover tries them all). Kafka evicts the consumer if that exceeds the interval.
+    monkeypatch.setenv("JUDGE_SERVER_URL", "https://a:8080,https://b:8080")
+    c = _reload_config_clean(monkeypatch, "JUDGE_SERVER_URL")
+    sync = c.MINIO_TIMEOUT_SECONDS * (c.MINIO_RETRIES + 1)
+    judge = (c.JUDGE_TIMEOUT_SECONDS + c.SPJ_COMPILE_ALLOWANCE_SECONDS) * len(c.JUDGE_SERVER_URLS)
+    assert c.MAX_POLL_INTERVAL_MS >= (sync + judge) * 1000
+
+
+def test_minio_timeout_defaults(monkeypatch):
+    c = _reload_config_clean(monkeypatch)
+    assert (c.MINIO_TIMEOUT_SECONDS, c.MINIO_RETRIES) == (60, 2)
 
 
 def test_consumer_tuning_env_override(monkeypatch):
