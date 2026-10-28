@@ -9,7 +9,8 @@ import tls
 import tracing
 from config import Config
 from log_context import SubmissionIdFilter
-from worker import connect, run, safe_json_deserialize
+from shutdown import Shutdown
+from worker import connect, safe_json_deserialize, serve
 
 _handler = logging.StreamHandler()
 _handler.addFilter(SubmissionIdFilter())
@@ -25,6 +26,8 @@ def build_consumer(config):
         group_id=config.CONSUMER_GROUP,
         enable_auto_commit=False,
         auto_offset_reset="earliest",
+        # An idle pass ends after a second, so serve() can look at the shutdown flag between passes.
+        consumer_timeout_ms=1000,
         value_deserializer=safe_json_deserialize,
         # T2-5: tune for slow, one-at-a-time judging so a busy worker is not mistaken for a dead
         # one and evicted (which causes rebalance churn and duplicate verdicts).
@@ -52,7 +55,10 @@ def main():
                  cfg.KAFKA_BROKERS, tracing.init_tracing())
     metrics.start(cfg)  # before Kafka: /metrics answers while the worker waits for a broker
     sandbox_status.start(cfg)
-    run(cfg, connect(build_consumer, cfg), connect(build_producer, cfg))
+    shutdown = Shutdown().install()
+    stop = lambda: shutdown.requested  # noqa: E731
+    serve(cfg, connect(build_consumer, cfg, stop=stop), connect(build_producer, cfg, stop=stop), shutdown)
+    logging.info("judge-worker stopped cleanly")
 
 
 if __name__ == "__main__":

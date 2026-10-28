@@ -470,7 +470,8 @@ def test_run_commits_only_after_the_retried_verdict():
     names = [c[0] for c in manager.mock_calls]
     assert names.index("consumer.pause") < names.index("consumer.poll") < names.index("producer.send") \
         < names.index("consumer.commit")
-    assert consumer.poll.call_args.kwargs == {"timeout_ms": 2000}
+    # the 2 s wait is polled in two 1 s slices, so a SIGTERM would end it within a second
+    assert [c.kwargs for c in consumer.poll.call_args_list] == [{"timeout_ms": 1000}, {"timeout_ms": 1000}]
     assert names.count("consumer.commit") == 1
 
 
@@ -574,3 +575,74 @@ def test_run_commits_and_continues_after_a_record_that_raises():
     assert consumer.commit.call_count == 2          # the poison pill's offset advances too
     assert producer.send.call_count == 1            # s13 was judged and published
     assert poison_pills("exception") - before == 1
+
+
+def test_run_finishes_the_current_record_then_stops_on_shutdown():
+    from shutdown import Shutdown
+    s = Shutdown()
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s20"}), Msg({"submissionId": "s21"})]
+    # SIGTERM arrives while s20 is being judged
+    producer.send.side_effect = lambda *a, **k: (s.request(), MagicMock())[1]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    with patch("worker.process_event", return_value={"submissionId": "s20", "status": 0}):
+        worker.run(cfg, consumer, producer, shutdown=s)
+    assert consumer.commit.call_count == 1                # s20 was published and committed
+    published = [c.kwargs["value"]["submissionId"] for c in producer.send.call_args_list]
+    assert published == ["s20"]                           # s21 was never taken
+
+
+def test_serve_loops_over_idle_passes_then_closes_the_consumer_on_shutdown():
+    from shutdown import Shutdown
+    s = Shutdown()
+    consumer = MagicMock()
+    passes = []
+
+    def idle_pass():
+        passes.append(1)
+        if len(passes) == 3:
+            s.request()                                   # SIGTERM arrives during the third idle pass
+        return iter([])                                   # consumer_timeout_ms elapsed with no record
+
+    consumer.__iter__.side_effect = idle_pass
+    worker.serve(MagicMock(), consumer, MagicMock(), s)   # must return, not spin
+    assert len(passes) == 3
+    consumer.close.assert_called_once()
+
+
+def test_serve_closes_the_consumer_even_when_a_pass_raises():
+    from shutdown import Shutdown
+    consumer = MagicMock()
+    consumer.__iter__.side_effect = RuntimeError("consumer broke")
+    with pytest.raises(RuntimeError):
+        worker.serve(MagicMock(), consumer, MagicMock(), Shutdown())
+    consumer.close.assert_called_once()
+
+
+def test_connect_exits_cleanly_when_shutdown_arrives_while_waiting_for_a_broker():
+    unreachable = KafkaTimeoutError("Unable to bootstrap from ['kafka:9092']")
+    build = MagicMock(side_effect=[unreachable, "never reached"])
+    with pytest.raises(SystemExit) as exit_:
+        worker.connect(build, "cfg", sleep=lambda s: None, stop=lambda: True)
+    assert exit_.value.code == 0
+    assert build.call_count == 1
+
+
+def test_wait_polls_in_one_second_slices_and_stops_early_on_shutdown():
+    from shutdown import Shutdown
+    s = Shutdown()
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s22"})]
+    consumer.poll.return_value = {}
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    # Kafka rejects the verdict at once, then SIGTERM arrives during the first wait
+    producer.send.return_value.get.side_effect = [KafkaTimeoutError(), KafkaTimeoutError(), None]
+    consumer.poll.side_effect = lambda **kw: (s.request(), {})[1]
+    with patch("worker.process_event", return_value={"submissionId": "s22", "status": 0}):
+        worker.run(cfg, consumer, producer, shutdown=s)
+    # wait(1) and wait(2) each poll once with a 1000 ms slice; shutdown cut the second wait short
+    assert all(c.kwargs == {"timeout_ms": 1000} for c in consumer.poll.call_args_list)
+    assert producer.send.return_value.get.call_count == 3  # the verdict was still delivered
+    assert consumer.commit.call_count == 1

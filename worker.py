@@ -9,6 +9,7 @@ from prometheus_client import Counter
 
 import infra_errors
 import tracing
+from shutdown import Shutdown
 from handler import job_identity, process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
 
 log = logging.getLogger("judge-worker")
@@ -42,9 +43,10 @@ def backoff_delays():
         delay = min(delay * 2, BACKOFF_MAX_SECONDS)
 
 
-def connect(build, config, sleep=time.sleep):
+def connect(build, config, sleep=time.sleep, stop=lambda: False):
     """build(config), retried while no broker answers — Kafka still starting, or away when Docker restarted us —
-    instead of exiting into Docker's restart back-off (sub-project 7 §3.2)."""
+    instead of exiting into Docker's restart back-off (sub-project 7 §3.2). stop() true (SIGTERM during the wait)
+    exits cleanly: nothing is in hand yet."""
     for delay in backoff_delays():
         try:
             return build(config)
@@ -52,6 +54,9 @@ def connect(build, config, sleep=time.sleep):
             # kafka-python 3 gives up bootstrapping with "Unable to bootstrap" (2.x raised NoBrokersAvailable).
             log.warning("No Kafka broker answers; trying again in %d s", delay)
             sleep(delay)
+            if stop():
+                log.warning("Shutdown requested while waiting for Kafka: exiting")
+                raise SystemExit(0)
 
 
 def generation_of(message):
@@ -183,20 +188,29 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep, now_ms=No
                            tracing.headers_from_current_context(), wait, id_key=id_key)
 
 
-def run(config, consumer, producer):
+def run(config, consumer, producer, shutdown=None):
+    """One pass over the consumer: judge, publish and commit each record in turn. Returns when the consumer's iteration
+    ends (consumer_timeout_ms with no record) or, after the record in hand is committed, when shutdown was requested."""
+    shutdown = shutdown or Shutdown()
+
     def wait(seconds):
         # Kafka is away: poll() keeps this consumer in its group (it is how the group sees we are alive) while every
         # partition is paused, so no next submission is fetched. kafka-python 2.0.2 may block in poll() until the
         # coordinator is back (in a full outage the first wait lasts the whole outage), or raise; either way the
         # verdict is sent again afterwards. A rebalance completing inside poll() un-pauses every partition and the poll
         # may then fetch a record and advance its position: rewind it, so the next commit does not skip it.
+        # Polled in 1 s slices so a SIGTERM ends the wait within a second; the verdict is still sent before exiting.
         consumer.pause(*consumer.assignment())
-        try:
-            for tp, records in consumer.poll(timeout_ms=int(seconds * 1000)).items():
-                consumer.seek(tp, records[0].offset)
-        except KafkaError as exc:
-            log.warning("poll() while waiting for Kafka failed (%r)", exc)
-            time.sleep(seconds)
+        remaining = seconds
+        while remaining > 0 and not shutdown.requested:
+            piece = min(1, remaining)
+            try:
+                for tp, records in consumer.poll(timeout_ms=int(piece * 1000)).items():
+                    consumer.seek(tp, records[0].offset)
+            except KafkaError as exc:
+                log.warning("poll() while waiting for Kafka failed (%r)", exc)
+                time.sleep(piece)
+            remaining -= piece
 
     for msg in consumer:
         try:
@@ -213,3 +227,16 @@ def run(config, consumer, producer):
             # The group moved on while Kafka was away: the message comes again, is judged again, and submission-service
             # ignores the second verdict (the first terminal one wins).
             log.warning("Offset commit failed (%r); the message will be delivered and judged again", exc)
+        if shutdown.requested:
+            return
+
+
+def serve(config, consumer, producer, shutdown):
+    """run() until shutdown is requested, then close the consumer (leaving the group at once, so its partitions are
+    not stalled for the session timeout). The consumer is built with consumer_timeout_ms, so an idle pass ends and
+    this loop looks at the flag again."""
+    try:
+        while not shutdown.requested:
+            run(config, consumer, producer, shutdown)
+    finally:
+        consumer.close()

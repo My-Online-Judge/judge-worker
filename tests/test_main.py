@@ -31,6 +31,8 @@ def test_build_consumer_applies_poll_tuning(monkeypatch):
     assert kwargs["heartbeat_interval_ms"] == config.Config.HEARTBEAT_INTERVAL_MS
     # commit stays manual (after publish) — must not regress to auto-commit
     assert kwargs["enable_auto_commit"] is False
+    # an idle pass ends after a second so serve() can notice a SIGTERM between passes
+    assert kwargs["consumer_timeout_ms"] == 1000
 
 
 def _main_with_stub_kafka(monkeypatch):
@@ -80,20 +82,24 @@ def test_main_builds_the_kafka_clients_through_connect(monkeypatch):
     import main
     for name in ("metrics", "sandbox_status", "tracing"):
         monkeypatch.setattr(main, name, MagicMock())
-    connect = MagicMock(side_effect=lambda build, cfg: f"built by {build.__name__}")
-    run = MagicMock()
+    connect = MagicMock(side_effect=lambda build, cfg, stop=None: f"built by {build.__name__}")
+    serve = MagicMock()
+    shutdown = MagicMock()
+    shutdown.install.return_value = shutdown          # no real signal handlers in the pytest process
     monkeypatch.setattr(main, "connect", connect)
-    monkeypatch.setattr(main, "run", run)
+    monkeypatch.setattr(main, "serve", serve)
+    monkeypatch.setattr(main, "Shutdown", MagicMock(return_value=shutdown))
 
     main.main()
 
     assert [c.args[0] for c in connect.call_args_list] == [main.build_consumer, main.build_producer]
-    run.assert_called_once_with(main.Config, "built by build_consumer", "built by build_producer")
+    serve.assert_called_once_with(main.Config, "built by build_consumer", "built by build_producer", shutdown)
+    shutdown.install.assert_called_once_with()
 
 
 def test_main_validates_the_config_before_starting_anything(monkeypatch):
     main = _main_with_stub_kafka(monkeypatch)
-    for name in ("metrics", "sandbox_status", "tracing", "connect", "run"):
+    for name in ("metrics", "sandbox_status", "tracing", "connect", "serve", "Shutdown"):
         monkeypatch.setattr(main, name, MagicMock())
     monkeypatch.setattr(main.Config, "JUDGE_SERVER_TOKEN", "")
 
