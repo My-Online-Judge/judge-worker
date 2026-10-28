@@ -9,7 +9,7 @@ from prometheus_client import Counter
 
 import infra_errors
 import tracing
-from shutdown import Shutdown
+from shutdown import Shutdown, ShutdownInterrupt
 from handler import job_identity, process_event, system_error_event  # noqa: F401 (re-exported for callers/tests)
 
 log = logging.getLogger("judge-worker")
@@ -210,7 +210,12 @@ def run(config, consumer, producer, shutdown=None):
         # coordinator is back (in a full outage the first wait lasts the whole outage), or raise; either way the
         # verdict is sent again afterwards. A rebalance completing inside poll() un-pauses every partition and the poll
         # may then fetch a record and advance its position: rewind it, so the next commit does not skip it.
-        # Polled in 1 s slices so a SIGTERM ends the wait within a second; the verdict is still sent before exiting.
+        # Polled in 1 s slices so a SIGTERM ends the wait within a second. Once SIGTERM is in, a retry that still fails
+        # cannot be waited out (the grace period is shorter than the retry budgets, and retrying without a delay would
+        # only hammer the infrastructure): the wait raises, run() leaves the record uncommitted and another worker judges
+        # it again. A judgement or a publish that succeeds after the signal is still finished and committed.
+        if shutdown.requested:
+            raise ShutdownInterrupt()
         consumer.pause(*consumer.assignment())
         remaining = seconds
         while remaining > 0 and not shutdown.requested:
@@ -226,9 +231,16 @@ def run(config, consumer, producer, shutdown=None):
     for msg in consumer:
         try:
             handle_one(msg.value, config, producer, headers=msg.headers, wait=wait)
+        except ShutdownInterrupt:
+            log.warning("Shutdown requested while the infrastructure is away: %s/%s offset %s is left uncommitted and is "
+                        "judged again by another worker", msg.topic, msg.partition, msg.offset)
+            return
         except Exception:
             # A record this code cannot handle (a bug, or a shape nobody foresaw) must not take the worker down: an
             # exit here re-reads the same offset after the restart and crash-loops on it. Log, count, commit past it.
+            # That includes a verdict that was judged but could not be published for a reason that is not Kafka being
+            # away (a refusal of the replacement SYSTEM_ERROR, a value that does not serialise): it is lost, and
+            # submission-service's reconcile fails the submission ("Judging timed out") after three minutes.
             log.exception("Poison pill at %s/%s offset %s: skipping it", msg.topic, msg.partition, msg.offset)
             POISON_PILL.labels("exception").inc()
         consumer.resume(*consumer.paused())

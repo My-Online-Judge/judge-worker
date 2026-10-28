@@ -629,23 +629,52 @@ def test_connect_exits_cleanly_when_shutdown_arrives_while_waiting_for_a_broker(
     assert build.call_count == 1
 
 
-def test_wait_polls_in_one_second_slices_and_stops_early_on_shutdown():
+def test_after_sigterm_a_publish_kafka_still_refuses_is_abandoned_uncommitted_not_hammered():
     from shutdown import Shutdown
     s = Shutdown()
     manager = MagicMock()
     producer, consumer = manager.producer, manager.consumer
     consumer.__iter__.return_value = [Msg({"submissionId": "s22"})]
-    consumer.poll.return_value = {}
+    producer.send.return_value.get.side_effect = KafkaTimeoutError()          # Kafka stays away
+    consumer.poll.side_effect = lambda **kw: (s.request(), {})[1]             # SIGTERM arrives during the first wait
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
-    # Kafka rejects the verdict at once, then SIGTERM arrives during the first wait
-    producer.send.return_value.get.side_effect = [KafkaTimeoutError(), KafkaTimeoutError(), None]
-    consumer.poll.side_effect = lambda **kw: (s.request(), {})[1]
     with patch("worker.process_event", return_value={"submissionId": "s22", "status": 0}):
         worker.run(cfg, consumer, producer, shutdown=s)
-    # wait(1) and wait(2) each poll once with a 1000 ms slice; shutdown cut the second wait short
-    assert all(c.kwargs == {"timeout_ms": 1000} for c in consumer.poll.call_args_list)
-    assert producer.send.return_value.get.call_count == 3  # the verdict was still delivered
+    assert producer.send.call_count <= 2          # one retry after the signal at most, not a loop without a delay
+    consumer.commit.assert_not_called()           # not committed: another worker judges it again
+
+
+def test_after_sigterm_an_outage_of_the_sandbox_abandons_the_submission_uncommitted():
+    from shutdown import Shutdown
+    s = Shutdown()
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s23"})]
+    consumer.poll.side_effect = lambda **kw: (s.request(), {})[1]
+    with patch("worker.process_event", side_effect=requests.ConnectionError("refused")) as judge:
+        worker.run(infra_cfg(), consumer, producer, shutdown=s)
+    assert judge.call_count <= 2                  # not re-tried back to back until the grace period ends
+    producer.send.assert_not_called()             # no made-up SYSTEM_ERROR for a submission that was never judged
+    consumer.commit.assert_not_called()
+
+
+def test_a_judgement_that_succeeds_after_sigterm_is_still_published_and_committed():
+    from shutdown import Shutdown
+    s = Shutdown()
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s24"})]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+
+    def judge(event, config, on_started=None):
+        s.request()                               # SIGTERM arrives while the sandbox is judging
+        return {"submissionId": "s24", "status": 0}
+
+    with patch("worker.process_event", side_effect=judge):
+        worker.run(cfg, consumer, producer, shutdown=s)
+    assert producer.send.call_count == 1
     assert consumer.commit.call_count == 1
+
 
 
 def test_a_minio_slowdown_during_the_bundle_sync_is_retried_then_judged():

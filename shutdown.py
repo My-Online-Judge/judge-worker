@@ -8,6 +8,11 @@ import threading
 log = logging.getLogger("judge-worker")
 
 
+class ShutdownInterrupt(Exception):
+    """Raised by run()'s wait() when it is asked to wait for the infrastructure after SIGTERM: whatever was being retried
+    is abandoned (nothing is published for it, its offset is not committed) and another worker judges it again."""
+
+
 class Shutdown:
     def __init__(self):
         self._event = threading.Event()
