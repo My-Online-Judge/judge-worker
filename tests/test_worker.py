@@ -659,3 +659,41 @@ def test_a_minio_slowdown_during_the_bundle_sync_is_retried_then_judged():
     assert waits == [2]                                    # waited via run()'s poll-keeping wait, then judged again
     assert producer.send.call_args.kwargs["value"]["status"] == 0
     assert infra_retries("minio") - before == 1
+
+
+# ---- replyTo: which submission-service instance asked (Run lane, one consumer group per instance) ----------------------
+
+def test_a_runs_reply_to_is_echoed_on_its_verdict():
+    producer = MagicMock()
+    cfg = _run_cfg()
+    event = {"runId": "r50", "replyTo": "submission-service-abc", "test_case": [{"input": "1"}]}
+    with patch("worker.process_event", return_value={"runId": "r50", "status": 0}):
+        worker.handle_one(event, cfg, producer)
+    assert producer.send.call_args.kwargs["value"]["replyTo"] == "submission-service-abc"
+
+
+def test_a_failed_judging_still_names_who_asked():
+    producer = MagicMock()
+    event = {"runId": "r51", "replyTo": "inst-2", "test_case": [{"input": "1"}]}
+    with patch("worker.process_event", side_effect=RuntimeError("sandbox exploded")):
+        worker.handle_one(event, _run_cfg(), producer)
+    sent = producer.send.call_args.kwargs["value"]
+    assert sent["status"] == verdict.SYSTEM_ERROR and sent["replyTo"] == "inst-2"
+
+
+def test_a_verdict_the_broker_refuses_is_replaced_by_a_system_error_that_keeps_reply_to():
+    producer = MagicMock()
+    producer.send.return_value.get.side_effect = [MessageSizeTooLargeError(), None]
+    event = {"runId": "r52", "replyTo": "inst-3", "test_case": [{"input": "1"}]}
+    with patch("worker.process_event", return_value={"runId": "r52", "status": 0, "details": ["x" * 10]}):
+        worker.handle_one(event, _run_cfg(), producer)
+    replacement = producer.send.call_args_list[-1].kwargs["value"]
+    assert replacement["status"] == verdict.SYSTEM_ERROR and replacement["replyTo"] == "inst-3"
+
+
+def test_a_submission_verdict_has_no_reply_to():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    with patch("worker.process_event", return_value={"submissionId": "s53", "status": 0}):
+        worker.handle_one({"submissionId": "s53"}, cfg, producer)
+    assert "replyTo" not in producer.send.call_args.kwargs["value"]

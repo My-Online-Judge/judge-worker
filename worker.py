@@ -35,6 +35,11 @@ BACKOFF_MAX_SECONDS = 10
 GENERATION_KEY = "rejudgeCount"
 
 
+# Which submission-service instance asked for a run (its consumer group is per instance, so only that one may complete
+# it). Echoed unchanged on run.judged, like the generation; a submission carries none.
+REPLY_TO_KEY = "replyTo"
+
+
 def backoff_delays():
     """1, 2, 4, 8, 10, 10, … seconds."""
     delay = BACKOFF_START_SECONDS
@@ -57,6 +62,11 @@ def connect(build, config, sleep=time.sleep, stop=lambda: False):
             if stop():
                 log.warning("Shutdown requested while waiting for Kafka: exiting")
                 raise SystemExit(0)
+
+
+def reply_to_of(message):
+    """The message's replyTo, as a dict to merge into what is published about it; empty when it has none."""
+    return {REPLY_TO_KEY: message[REPLY_TO_KEY]} if REPLY_TO_KEY in message else {}
 
 
 def generation_of(message):
@@ -96,7 +106,7 @@ def publish_until_sent(producer, config, submission_id, judged, headers, wait, i
                 log.error("Kafka refused the verdict of %s for good (%r); sending a SYSTEM_ERROR instead",
                           submission_id, exc)
                 replacement = system_error_event(submission_id, f"verdict not publishable: {exc!r}", id_key=id_key)
-                judged, replaced = {**replacement, **generation_of(judged)}, True
+                judged, replaced = {**replacement, **generation_of(judged), **reply_to_of(judged)}, True
                 continue
             log.warning("Verdict of submission %s not published (%r); sending it again in %d s",
                         submission_id, exc, delay)
@@ -182,7 +192,8 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep, now_ms=No
         generation = generation_of(event)
         judged = judge_with_infra_retry(
             event, config, lambda: publish_started(producer, config, submission_id, generation), wait)
-        judged = {**judged, **generation}  # every verdict, a SYSTEM_ERROR included, names the request's generation
+        # every verdict, a SYSTEM_ERROR included, names the request's generation and who asked
+        judged = {**judged, **generation, **reply_to_of(event)}
         span.set_attribute("oj.verdict_status", judged.get("status"))
         publish_until_sent(producer, config, submission_id, judged,
                            tracing.headers_from_current_context(), wait, id_key=id_key)
