@@ -14,11 +14,13 @@ import worker
 
 
 class Msg:
-    """Stand-in for kafka-python's ConsumerRecord: the worker reads .value and .headers."""
+    """Stand-in for kafka-python's ConsumerRecord: the worker reads .value and .headers, and names
+    .topic/.partition/.offset when it logs a record it skipped."""
 
-    def __init__(self, value, headers=None):
+    def __init__(self, value, headers=None, offset=0):
         self.value = value
         self.headers = headers or []
+        self.topic, self.partition, self.offset = "submission.requested", 0, offset
 
 
 def test_system_error_event_shape():
@@ -532,3 +534,43 @@ def test_a_run_verdict_kafka_refuses_for_good_is_replaced_under_its_run_id():
     assert replacement["runId"] == "r6"
     assert "submissionId" not in replacement
     assert replacement["status"] == verdict.SYSTEM_ERROR
+
+
+def poison_pills(reason):
+    return REGISTRY.get_sample_value("oj_poison_pill_total", {"reason": reason}) or 0
+
+
+@pytest.mark.parametrize("event", [[], 1, "x"])
+def test_handle_one_skips_valid_json_that_is_not_an_object(event):
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", JUDGE_TIMEOUT_SECONDS=30)
+    before = poison_pills("non_object")
+    worker.handle_one(event, cfg, producer)  # must not raise
+    producer.send.assert_not_called()
+    assert poison_pills("non_object") - before == 1
+
+
+@pytest.mark.parametrize("expires_at", ["abc", "123", None, [], {}])
+def test_is_expired_ignores_a_non_numeric_expires_at(expires_at):
+    assert worker.is_expired({"runId": "r", "expiresAt": expires_at}, now_ms=10) is False
+
+
+def test_run_commits_and_continues_after_a_record_that_raises():
+    manager = MagicMock()
+    producer, consumer = manager.producer, manager.consumer
+    consumer.__iter__.return_value = [Msg({"submissionId": "s12"}), Msg({"submissionId": "s13"})]
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PUBLISH_TIMEOUT_SECONDS=10)
+    before = poison_pills("exception")
+    real = worker.job_identity
+
+    def identity(event):
+        if event["submissionId"] == "s12":
+            raise TypeError("boom")
+        return real(event)
+
+    with patch("worker.job_identity", side_effect=identity), \
+            patch("worker.process_event", return_value={"submissionId": "s13", "status": 0}):
+        worker.run(cfg, consumer, producer)
+    assert consumer.commit.call_count == 2          # the poison pill's offset advances too
+    assert producer.send.call_count == 1            # s13 was judged and published
+    assert poison_pills("exception") - before == 1

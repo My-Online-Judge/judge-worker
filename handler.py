@@ -17,7 +17,10 @@ JOB_ID_KEYS = ("submissionId", "runId")
 
 
 def job_identity(event):
-    """(key, id) of the job the event names — ("submissionId", …) or ("runId", …) — or None when it names neither."""
+    """(key, id) of the job the event names — ("submissionId", …) or ("runId", …) — or None when it names neither,
+    or is not a JSON object at all (`[]`, `1`, `"x"` parse fine but name nothing)."""
+    if not isinstance(event, dict):
+        return None
     for key in JOB_ID_KEYS:
         value = event.get(key)
         if value:

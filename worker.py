@@ -16,6 +16,9 @@ log = logging.getLogger("judge-worker")
 # A run (Run code design §8) names the instant after which nobody waits for it; one picked up later is skipped, so a
 # backlog left by a run-lane outage is cleared at once instead of being judged into the void.
 RUN_EXPIRED = Counter("oj_run_expired", "Runs skipped because their caller had stopped waiting")
+# Records the worker skipped and committed past instead of exiting on: JSON that is not an object (non_object), or
+# anything handle_one raised on (exception). One of these is a producer bug or a worker bug, never a verdict.
+POISON_PILL = Counter("oj_poison_pill", "Records skipped because the worker could not handle them", ["reason"])
 
 # Sub-project 7 §3.2: a verdict Kafka did not take is sent again until it does — never dropped, never judged again,
 # and never a reason to exit (an exit cost a Docker restart back-off and a consumer-group rebalance).
@@ -141,9 +144,10 @@ def judge_with_infra_retry(event, config, on_started, wait):
 
 
 def is_expired(event, now_ms):
-    """True for a run whose expiresAt (epoch ms) has passed; a record without one (a submission) never expires."""
+    """True for a run whose expiresAt (epoch ms) has passed; a record without one (a submission), or with one that is
+    not a number, never expires."""
     expires_at = event.get("expiresAt")
-    return expires_at is not None and now_ms > expires_at
+    return isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool) and now_ms > expires_at
 
 
 def handle_one(event, config, producer, headers=None, wait=time.sleep, now_ms=None):
@@ -152,7 +156,11 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep, now_ms=No
         return
     identity = job_identity(event)
     if identity is None:
-        log.error("Received event without submissionId or runId, skipping: %r", event)
+        if isinstance(event, dict):
+            log.error("Received event without submissionId or runId, skipping: %r", event)
+        else:
+            log.error("Skipping a record whose JSON is not an object (%s)", type(event).__name__)
+            POISON_PILL.labels("non_object").inc()
         return
     id_key, submission_id = identity
     if is_expired(event, time.time() * 1000 if now_ms is None else now_ms):
@@ -191,7 +199,13 @@ def run(config, consumer, producer):
             time.sleep(seconds)
 
     for msg in consumer:
-        handle_one(msg.value, config, producer, headers=msg.headers, wait=wait)
+        try:
+            handle_one(msg.value, config, producer, headers=msg.headers, wait=wait)
+        except Exception:
+            # A record this code cannot handle (a bug, or a shape nobody foresaw) must not take the worker down: an
+            # exit here re-reads the same offset after the restart and crash-loops on it. Log, count, commit past it.
+            log.exception("Poison pill at %s/%s offset %s: skipping it", msg.topic, msg.partition, msg.offset)
+            POISON_PILL.labels("exception").inc()
         consumer.resume(*consumer.paused())
         try:
             consumer.commit()  # AFTER publish → at-least-once

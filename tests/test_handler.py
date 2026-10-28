@@ -2,6 +2,8 @@ import json
 import logging
 from unittest.mock import patch
 
+import pytest
+
 import handler
 import verdict
 
@@ -136,3 +138,8 @@ def test_a_submission_still_syncs_its_bundle_and_announces_its_start():
     on_started.assert_called_once()
     assert out["submissionId"] == "sub-9"
     assert "runId" not in out
+
+
+@pytest.mark.parametrize("event", [[], 1, "x", None])
+def test_job_identity_of_a_non_object_event_is_none(event):
+    assert handler.job_identity(event) is None
