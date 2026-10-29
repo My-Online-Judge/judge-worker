@@ -50,10 +50,22 @@ jobs:
           exit-code: "1"
 
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The image above (amd64) is the one tested and scanned. What is pushed is built again for amd64 and arm64, so the same tag runs on the
+      # server and on an Apple-silicon laptop; the Dockerfile builds the platform-independent part natively, so arm64 is not emulated for it.
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker push "$IMAGE:${{ github.sha }}" && docker push "$IMAGE:main"
+        name: Push the multi-arch image
+        run: >-
+          docker buildx build --platform linux/amd64,linux/arm64
+          --label org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          --push -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:main" .
