@@ -1,6 +1,8 @@
 import importlib
 import re
+from unittest.mock import patch
 
+import grpc
 import pytest
 
 import config
@@ -24,7 +26,8 @@ def test_enabled_returns_ssl_kwargs(tls_dir):
                                   "ssl_keyfile": key, "ssl_check_hostname": True}
 
 
-@pytest.mark.parametrize("kwargs", ["kafka_kwargs", "requests_kwargs", "metrics_kwargs", "minio_http_client"])
+@pytest.mark.parametrize("kwargs", ["kafka_kwargs", "requests_kwargs", "metrics_kwargs", "minio_http_client",
+                                    "grpc_channel_credentials"])
 def test_missing_file_raises_with_name(tls_dir, kwargs):
     (tls_dir / "tls.key").unlink()
 
@@ -87,3 +90,31 @@ def test_minio_http_client_configured(tls_dir):
     assert kw["retries"].total == config.Config.MINIO_RETRIES
     assert (kw["retries"].backoff_factor, kw["retries"].status_forcelist) == (
         default["retries"].backoff_factor, default["retries"].status_forcelist)
+
+
+def test_grpc_credentials_none_without_tls(monkeypatch):
+    monkeypatch.delenv("OJ_TLS_DIR", raising=False)
+    importlib.reload(config)
+
+    # None: the caller opens a plaintext channel, as before TLS.
+    assert tls.grpc_channel_credentials() is None
+
+
+def test_grpc_credentials_reads_files(tls_dir):
+    assert isinstance(tls.grpc_channel_credentials(), grpc.ChannelCredentials)
+
+    # With TLS on, a missing certificate stops the worker; it never falls back to plaintext.
+    (tls_dir / "ca.crt").unlink()
+    with pytest.raises(RuntimeError, match=re.escape(str(tls_dir / "ca.crt"))):
+        tls.grpc_channel_credentials()
+
+
+def test_grpc_credentials_trust_the_ca_and_present_the_workers_certificate(tls_dir):
+    with patch("tls.grpc.ssl_channel_credentials") as ssl_channel_credentials:
+        creds = tls.grpc_channel_credentials()
+
+    # The sandbox is verified against the CA (gRPC checks the host name of the address), and it requires the worker's
+    # certificate: the files' contents, not their paths.
+    ssl_channel_credentials.assert_called_once_with(
+        root_certificates=b"ca.crt", private_key=b"tls.key", certificate_chain=b"tls.crt")
+    assert creds is ssl_channel_credentials.return_value

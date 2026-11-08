@@ -5,7 +5,7 @@ import os
 import config
 import verdict
 from event_limits import limit_event
-from dispatcher import build_judge_body, dispatch_judge
+from dispatcher import build_judge_request, dispatch_judge
 from log_context import submission_id_var
 from test_case_sync import ensure_present, maybe_sweep
 
@@ -107,13 +107,13 @@ def process_event(event, config, on_started=None):
             expected_count = bundle_case_count(ensure_present(event["test_case_id"]))
             if on_started is not None:
                 on_started()
-        body = build_judge_body(event)
+        request = build_judge_request(event)
         timeout = config.JUDGE_TIMEOUT_SECONDS
-        if "spj_version" in body:
+        if request.HasField("spj"):
             # The sandbox may first have to compile the checker (Config.SPJ_COMPILE_ALLOWANCE_SECONDS).
             timeout += config.SPJ_COMPILE_ALLOWANCE_SECONDS
         judge_response = dispatch_judge(
-            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, body, timeout=timeout,
+            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, request, timeout=timeout,
         )
         return build_judged_event(job_id, judge_response, id_key=key, expected_count=expected_count)
     finally:

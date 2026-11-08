@@ -4,6 +4,7 @@ Config is read at call time (config.Config), so a reloaded config is seen.
 """
 import os
 
+import grpc
 import urllib3
 
 import config
@@ -36,13 +37,30 @@ def kafka_kwargs() -> dict:
 
 
 def requests_kwargs() -> dict:
-    """requests settings for calls to the services (the heartbeat to submission-service) and to the sandboxes (/judge,
-    /ping): the worker's certificate presented (they require one), the server verified against the CA (requests also
-    checks the host name)."""
+    """requests settings for calls to the services (the heartbeat to submission-service) and to the sandboxes (/ping):
+    the worker's certificate presented (they require one), the server verified against the CA (requests also checks the
+    host name)."""
     if not enabled():
         return {}
     ca, cert, key = paths()
     return {"cert": (cert, key), "verify": ca}
+
+
+def grpc_channel_credentials() -> grpc.ChannelCredentials | None:
+    """Credentials for a gRPC channel to a sandbox (JudgeServer): the sandbox verified against the CA (gRPC checks the
+    host name of the address dialled), the worker's certificate presented (the sandbox requires one and admits only the
+    CNs it allow-lists). None when TLS is off: the caller opens a plaintext channel. A channel keeps the files' contents
+    from the moment it is created."""
+    if not enabled():
+        return None
+    ca, cert, key = paths()
+    return grpc.ssl_channel_credentials(root_certificates=_read(ca), private_key=_read(key),
+                                        certificate_chain=_read(cert))
+
+
+def _read(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
 
 
 def metrics_kwargs() -> dict:

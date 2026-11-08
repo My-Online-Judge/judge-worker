@@ -24,15 +24,16 @@ def test_filter_defaults_to_dash_when_unset():
 
 def test_process_event_sets_and_resets_contextvar(monkeypatch):
     import handler
+    from judge_server_pb2 import JudgeRequest
     from log_context import submission_id_var
     captured = {}
     # stub the judging pipeline so process_event runs without a live stack
     monkeypatch.setattr(handler, "maybe_sweep", lambda: None)
     monkeypatch.setattr(handler, "ensure_present", lambda tcid: None)
-    def capture_body(e):
+    def capture_request(e):
         captured["during"] = submission_id_var.get()
-        return {}
-    monkeypatch.setattr(handler, "build_judge_body", capture_body)
+        return JudgeRequest()
+    monkeypatch.setattr(handler, "build_judge_request", capture_request)
     monkeypatch.setattr(handler, "dispatch_judge", lambda *a, **k: {"err": None, "data": []})
 
     class Cfg:

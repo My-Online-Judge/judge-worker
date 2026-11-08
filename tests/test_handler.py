@@ -91,7 +91,7 @@ def test_checker_requests_get_the_compile_allowance():
          patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
         handler.process_event(checker, Cfg)
         handler.process_event(plain, Cfg)
-    assert [(c.args[2].get("spj_version"), c.kwargs["timeout"]) for c in m.call_args_list] == [("ab12", 50), (None, 30)]
+    assert [(c.args[2].HasField("spj"), c.kwargs["timeout"]) for c in m.call_args_list] == [(True, 50), (False, 30)]
 
 
 class _Cfg:
@@ -120,8 +120,9 @@ def test_an_inline_run_neither_syncs_a_bundle_nor_announces_a_start():
     ensure.assert_not_called()
     sweep.assert_not_called()
     on_started.assert_not_called()
-    assert m.call_args.args[2]["test_case"] == event["test_case"]
-    assert "test_case_id" not in m.call_args.args[2]
+    request = m.call_args.args[2]
+    assert [(c.input, c.output) for c in request.test_case.cases] == [("1\n", "1\n")]
+    assert request.WhichOneof("cases") == "test_case"      # the cases travel in the request: no bundle is named
     assert out["runId"] == "r9"
     assert "submissionId" not in out
     assert out["status"] == verdict.ACCEPTED

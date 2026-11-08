@@ -1,7 +1,7 @@
 # judge-worker
 
 Kafka consumer bọc quanh qduoj judge-server. Consume `submission.requested`,
-gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
+gọi judge-server qua gRPC (`JudgeServer.Judge`), resolve verdict, publish `submission.judged`.
 
 ## Run tests
     python -m venv .venv && . .venv/bin/activate
@@ -11,8 +11,8 @@ gọi judge-server `/judge`, resolve verdict, publish `submission.judged`.
 ## Env
 - KAFKA_BROKERS (default localhost:9092)
 - OJ_TLS_DIR (vd /etc/oj/tls) — thư mục chứa `ca.crt`, `tls.crt`, `tls.key`: Kafka qua TLS, trình chứng chỉ client,
-  kiểm tra hostname của broker; heartbeat tới submission-service và các lệnh gọi sandbox (`/judge`, `/ping`) cũng trình
-  chứng chỉ đó; /metrics chạy HTTPS và chỉ trả lời client có chứng chỉ do CA ký (Prometheus). Thiếu file thì worker
+  kiểm tra hostname của broker; heartbeat tới submission-service, lệnh gọi sandbox `/ping` và kênh gRPC `Judge` tới
+  sandbox cũng trình chứng chỉ đó; /metrics chạy HTTPS và chỉ trả lời client có chứng chỉ do CA ký (Prometheus). Thiếu file thì worker
   dừng. Không đặt thì plaintext
 - JUDGE_SERVER_URL (default http://localhost:8080; compose: https://judge-server:8080,https://judge-server-2:8080)
 - JUDGE_SERVER_TOKEN (bắt buộc, không có default: thiếu thì worker dừng ngay khi khởi động)
