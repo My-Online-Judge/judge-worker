@@ -37,9 +37,9 @@ def kafka_kwargs() -> dict:
 
 
 def requests_kwargs() -> dict:
-    """requests settings for calls to the services (the heartbeat to submission-service) and to the sandboxes (/ping):
-    the worker's certificate presented (they require one), the server verified against the CA (requests also checks the
-    host name)."""
+    """requests settings for calls to the services (the heartbeat to submission-service): the worker's certificate
+    presented (they require one), the server verified against the CA (requests also checks the host name). The calls to
+    the sandboxes are gRPC (grpc_channel_credentials)."""
     if not enabled():
         return {}
     ca, cert, key = paths()

@@ -53,7 +53,7 @@ class Config:
     # the judging is started again after 2 s, 4 s, 8 s … capped at 60 s.
     JUDGE_INFRA_RETRY_SECONDS = _int_env("JUDGE_INFRA_RETRY_SECONDS", 300)
     # submission-service's judge-server registry. The sandboxes cannot reach it (internal network), so
-    # the worker relays each one's /ping there. Empty = no relay.
+    # the worker relays each one's Ping answer (gRPC) there. Empty = no relay.
     SANDBOX_HEARTBEAT_URL = os.getenv("SANDBOX_HEARTBEAT_URL", "")
     # Below the registry's 30 s liveness window, so one missed report does not flip a sandbox offline.
     SANDBOX_HEARTBEAT_INTERVAL_SECONDS = _int_env("SANDBOX_HEARTBEAT_INTERVAL_SECONDS", 10)

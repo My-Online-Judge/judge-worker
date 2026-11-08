@@ -11,8 +11,8 @@ gọi judge-server qua gRPC (`JudgeServer.Judge`), resolve verdict, publish `sub
 ## Env
 - KAFKA_BROKERS (default localhost:9092)
 - OJ_TLS_DIR (vd /etc/oj/tls) — thư mục chứa `ca.crt`, `tls.crt`, `tls.key`: Kafka qua TLS, trình chứng chỉ client,
-  kiểm tra hostname của broker; heartbeat tới submission-service, lệnh gọi sandbox `/ping` và kênh gRPC `Judge` tới
-  sandbox cũng trình chứng chỉ đó; /metrics chạy HTTPS và chỉ trả lời client có chứng chỉ do CA ký (Prometheus). Thiếu file thì worker
+  kiểm tra hostname của broker; heartbeat tới submission-service, và các lệnh gọi gRPC `Ping`, `Judge` tới sandbox
+  cũng trình chứng chỉ đó; /metrics chạy HTTPS và chỉ trả lời client có chứng chỉ do CA ký (Prometheus). Thiếu file thì worker
   dừng. Không đặt thì plaintext
 - JUDGE_SERVER_URL (default http://localhost:8080; compose: https://judge-server:8080,https://judge-server-2:8080)
 - JUDGE_SERVER_TOKEN (bắt buộc, không có default: thiếu thì worker dừng ngay khi khởi động)
@@ -31,9 +31,10 @@ gọi judge-server qua gRPC (`JudgeServer.Judge`), resolve verdict, publish `sub
   chấm) hay mã khác (INVALID_ARGUMENT, …). Với MinIO, lỗi chứng chỉ TLS (urllib3 SSLError) là vĩnh viễn: không retry (cấu hình
   sai, không tự khỏi). Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết` (tối đa 500 ký tự)
 - METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total, oj_run_expired_total
-- SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker chuyển `/ping` của
-  từng sandbox về registry thay cho sandbox (sandbox ở mạng internal, không tới được submission-service);
-  không đặt thì tắt. SANDBOX_HEARTBEAT_INTERVAL_SECONDS (default 10)
+- SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker gọi gRPC `Ping` của
+  từng sandbox rồi chuyển câu trả lời (hostname, judger_version, cpu_core, cpu, memory, running_jobs, max_jobs) về registry
+  thay cho sandbox (sandbox ở mạng internal, không tới được submission-service); không đặt thì tắt (vẫn `Ping` để cập
+  nhật oj_sandbox_up). SANDBOX_HEARTBEAT_INTERVAL_SECONDS (default 10)
 - OTEL_EXPORTER_OTLP_ENDPOINT (vd http://jaeger:4318) — bật tracing (OTLP/HTTP); không đặt thì tracing tắt hoàn toàn
 - OTEL_SERVICE_NAME (default judge-worker) — tên service trong Jaeger; `run-worker` đặt tên riêng của nó
 

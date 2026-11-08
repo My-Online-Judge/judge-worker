@@ -4,7 +4,6 @@ really raises (their status code and details are what _is_retryable reads)."""
 import hashlib
 import socket
 import time
-from concurrent import futures
 
 import grpc
 import pytest
@@ -31,29 +30,6 @@ class _Sandbox(pb_grpc.JudgeServerServicer):
         if self.abort:
             context.abort(*self.abort)
         return self.reply
-
-
-@pytest.fixture
-def serve(monkeypatch):
-    """serve(sandbox) -> the "http://127.0.0.1:port" URL of a live plaintext server answering with that sandbox.
-    Channels the dispatcher opens are closed with the servers."""
-    servers = []
-
-    def start(sandbox):
-        server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
-        pb_grpc.add_JudgeServerServicer_to_server(sandbox, server)
-        servers.append(server)
-        port = server.add_insecure_port("127.0.0.1:0")
-        server.start()
-        return f"http://127.0.0.1:{port}"
-
-    channels = {}
-    monkeypatch.setattr(dispatcher, "_channels", channels)
-    yield start
-    for channel in channels.values():
-        channel.close()
-    for server in servers:
-        server.stop(None)
 
 
 def _refused_url():

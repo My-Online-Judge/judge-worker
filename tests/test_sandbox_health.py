@@ -1,3 +1,4 @@
+import pytest
 from prometheus_client import REGISTRY
 
 import sandbox_health
@@ -33,5 +34,23 @@ def test_a_sandbox_marked_up_again_is_tried_in_turn():
 def test_the_gauge_follows_the_marks_by_hostname():
     sandbox_health.mark(A, True)
     sandbox_health.mark(B, False)
+    assert up("judge-server") == 1
+    assert up("judge-server-2") == 0
+
+
+def test_label_host_port():
+    assert sandbox_health.sandbox_label("judge-server-2:8080") == "judge-server-2"
+
+
+@pytest.mark.parametrize("target, label", [("https://judge-server:8080", "judge-server"),
+                                           ("http://judge-server-2:8080", "judge-server-2"),
+                                           ("judge-server", "judge-server")])
+def test_label_url_and_bare_host(target, label):
+    assert sandbox_health.sandbox_label(target) == label
+
+
+def test_the_gauge_follows_the_marks_by_hostname_for_host_port_targets():
+    sandbox_health.mark("judge-server:8080", True)
+    sandbox_health.mark("judge-server-2:8080", False)
     assert up("judge-server") == 1
     assert up("judge-server-2") == 0
