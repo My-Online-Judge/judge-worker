@@ -2,7 +2,6 @@ import hashlib
 import itertools
 import logging
 import threading
-from urllib.parse import urlsplit
 
 import grpc
 from prometheus_client import Counter
@@ -12,6 +11,7 @@ import judge_server_pb2 as pb
 import judge_server_pb2_grpc as pb_grpc
 import sandbox_health
 import tls
+from addresses import parse_address  # also dispatcher.parse_address, which sandbox_status and the tests call
 
 log = logging.getLogger("judge-worker")
 
@@ -48,22 +48,6 @@ def reset_round_robin():
 
 def token_header(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def parse_address(url):
-    """The gRPC target (host:port) of a configured sandbox URL: an http:// or https:// scheme is dropped (the transport
-    is chosen by OJ_TLS_DIR, not by the scheme), a bare host:port is kept. ValueError for a path, an empty host or a bad
-    port: a misconfiguration that would otherwise fail on every submission."""
-    rest = url.strip()
-    for scheme in ("https://", "http://"):
-        if rest.lower().startswith(scheme):
-            rest = rest[len(scheme):]
-            break
-    parts = urlsplit("//" + rest)
-    # parts.port raises ValueError itself for a port that is not a number in range; 0 is in range but cannot be dialled.
-    if not parts.hostname or parts.path or parts.query or parts.fragment or parts.port == 0:
-        raise ValueError(f"not a judge-server address (host:port): {url!r}")
-    return parts.netloc
 
 
 def _compile_config(c):

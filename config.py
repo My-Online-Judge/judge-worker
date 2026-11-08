@@ -1,6 +1,8 @@
 import os
 import socket
 
+from addresses import parse_address
+
 DEFAULT_JUDGE_TIMEOUT_SECONDS = 30
 
 
@@ -96,6 +98,12 @@ class Config:
 
     @classmethod
     def validate(cls) -> None:
-        """Refuse to start without the settings that have no safe default."""
+        """Refuse to start without the settings that have no safe default or that cannot work as written."""
         if not cls.JUDGE_SERVER_TOKEN:
             raise SystemExit("missing required env: JUDGE_SERVER_TOKEN")
+        # A malformed address fails every submission (dispatch_judge raises ValueError on it): stop here instead.
+        for url in cls.JUDGE_SERVER_URLS:
+            try:
+                parse_address(url)
+            except ValueError as exc:
+                raise SystemExit(f"invalid JUDGE_SERVER_URL entry: {url} ({exc})") from exc

@@ -164,6 +164,64 @@ def test_validate_requires_token(monkeypatch):
         importlib.reload(config)  # later tests get the session's token back
 
 
+@pytest.mark.parametrize("value, bad", [
+    ("https://judge-server:8080/judge", "https://judge-server:8080/judge"),
+    ("http://a:8080/", "http://a:8080/"),
+    ("https://:8080", "https://:8080"),
+    ("a:notaport", "a:notaport"),
+    ("a:0", "a:0"),
+    # the first bad entry is the one named, wherever it sits in the list
+    ("https://a:8080, http://b:8080/ping ,http://c:8080/x", "http://b:8080/ping"),
+])
+def test_validate_rejects_a_malformed_judge_server_url(monkeypatch, value, bad):
+    # A malformed address would fail every submission (dispatch_judge raises ValueError): the worker refuses to start.
+    import config
+    try:
+        monkeypatch.setenv("JUDGE_SERVER_TOKEN", "secret")
+        monkeypatch.setenv("JUDGE_SERVER_URL", value)
+        importlib.reload(config)
+        with pytest.raises(SystemExit) as exc_info:
+            config.Config.validate()
+        message = str(exc_info.value)
+        assert message.startswith(f"invalid JUDGE_SERVER_URL entry: {bad} (")
+        assert message.endswith(")")
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+@pytest.mark.parametrize("value", [
+    "judge-server:8080",
+    "https://judge-server:8080",
+    "http://localhost:8080",
+    "https://judge-server:8080,judge-server-2:8080, http://10.0.0.3:9090",
+])
+def test_validate_accepts_both_address_forms(monkeypatch, value):
+    # host:port and https://host:port (compose) are both a gRPC target; mixing them in one list is fine.
+    import config
+    try:
+        monkeypatch.setenv("JUDGE_SERVER_TOKEN", "secret")
+        monkeypatch.setenv("JUDGE_SERVER_URL", value)
+        importlib.reload(config)
+        assert config.Config.validate() is None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+def test_validate_checks_the_token_before_the_addresses(monkeypatch):
+    import config
+    try:
+        monkeypatch.delenv("JUDGE_SERVER_TOKEN", raising=False)
+        monkeypatch.setenv("JUDGE_SERVER_URL", "http://a:8080/judge")
+        importlib.reload(config)
+        with pytest.raises(SystemExit, match="^missing required env: JUDGE_SERVER_TOKEN$"):
+            config.Config.validate()
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
 def test_worker_id_prefers_pod_name_then_worker_id_then_hostname(monkeypatch):
     import socket
     monkeypatch.setenv("POD_NAME", "judge-7c9f-abcde")

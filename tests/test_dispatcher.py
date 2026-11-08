@@ -43,6 +43,12 @@ def test_parse_address_rejects_a_path_an_empty_host_or_a_bad_port(url):
         dispatcher.parse_address(url)
 
 
+def test_parse_address_is_the_helper_config_validates_with():
+    # One parser for both: Config.validate refuses at start what dispatch_judge would refuse per submission.
+    import addresses
+    assert dispatcher.parse_address is addresses.parse_address
+
+
 # --- build_judge_request: the event's qduoj-shaped fields as the proto's JudgeRequest ---
 
 _LANGUAGE_CONFIG = {
