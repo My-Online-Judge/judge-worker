@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 import grpc
 from prometheus_client import Counter
 
+import grpc_errors
 import judge_server_pb2 as pb
 import judge_server_pb2_grpc as pb_grpc
 import sandbox_health
@@ -18,15 +19,11 @@ log = logging.getLogger("judge-worker")
 TOKEN_METADATA_KEY = "x-judge-server-token"
 # A judge response carries every case's capped output, which can top gRPC's default 4 MiB.
 _MAX_RECEIVE_BYTES = 64 * 1024 * 1024
+_INITIAL_RECONNECT_BACKOFF_MS = 1000
+_MAX_RECONNECT_BACKOFF_MS = 5000
 
-# gRPC status codes of Judge that mean "this sandbox could not take the request", so the next one is tried: not up, TLS
-# handshake failed, judger failure before any case ran (UNAVAILABLE, INTERNAL) or running_jobs == MAX_JOBS with the wait
-# queue full (RESOURCE_EXHAUSTED). Every other code is raised at once: INVALID_ARGUMENT, NOT_FOUND, UNAUTHENTICATED and
-# PERMISSION_DENIED are deterministic (the same request fails everywhere), and DEADLINE_EXCEEDED means the sandbox has
-# the request and is still judging (it cancels the job when the call ends), so a second sandbox would judge the same
-# submission again, doubling the CPU exactly when the sandboxes are busiest.
-_RETRYABLE_CODES = frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL,
-                              grpc.StatusCode.RESOURCE_EXHAUSTED})
+# The codes dispatch_judge fails over on (grpc_errors.RETRYABLE_CODES: not up, TLS handshake failed, judger failure
+# before any case ran, or busy); every other code is raised at once.
 # Of those, the ones that say the sandbox itself is unwell. A busy sandbox is alive: it stays in rotation.
 _DOWN_CODES = frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL})
 
@@ -37,7 +34,8 @@ DISPATCHES = Counter("oj_judge_dispatch", "Judge requests sent to a sandbox, by 
 _round_robin = itertools.count()
 
 # One gRPC channel per sandbox address, for the life of the process: a channel multiplexes calls and reconnects by
-# itself.
+# itself, retrying a sandbox that went away after at most _MAX_RECONNECT_BACKOFF_MS (gRPC's default backoff grows to
+# 120 s, so a restarted sandbox would be refused for minutes).
 _channels = {}
 _channels_lock = threading.Lock()
 
@@ -152,7 +150,9 @@ def _channel(address):
     with _channels_lock:
         channel = _channels.get(address)
         if channel is None:
-            options = [("grpc.max_receive_message_length", _MAX_RECEIVE_BYTES)]
+            options = [("grpc.max_receive_message_length", _MAX_RECEIVE_BYTES),
+                       ("grpc.initial_reconnect_backoff_ms", _INITIAL_RECONNECT_BACKOFF_MS),
+                       ("grpc.max_reconnect_backoff_ms", _MAX_RECONNECT_BACKOFF_MS)]
             credentials = tls.grpc_channel_credentials()
             if credentials is None:
                 channel = grpc.insecure_channel(address, options=options)
@@ -175,21 +175,16 @@ def call_judge_server(address, token, request, timeout=30):
     return response_to_dict(response)
 
 
-def _code(exc):
-    """The gRPC status code of a failed call, or None for anything that is not one."""
-    code = getattr(exc, "code", None) if isinstance(exc, grpc.RpcError) else None
-    return code() if callable(code) else None
-
-
 def _is_retryable(exc):
-    """A sandbox that is down or full is worth failing over (_RETRYABLE_CODES); any other failure is raised at once."""
-    return _code(exc) in _RETRYABLE_CODES
+    """A sandbox that is down or full is worth failing over (grpc_errors.RETRYABLE_CODES); any other failure is raised
+    at once."""
+    return grpc_errors.code_of(exc) in grpc_errors.RETRYABLE_CODES
 
 
 def _marks_down(exc):
     """Whether the failure says the sandbox is unwell (sandbox_health.mark down). A busy sandbox (RESOURCE_EXHAUSTED)
     is failed over from but left in rotation."""
-    return _code(exc) in _DOWN_CODES
+    return grpc_errors.code_of(exc) in _DOWN_CODES
 
 
 def dispatch_judge(urls, token, request, timeout=30):
@@ -215,7 +210,8 @@ def dispatch_judge(urls, token, request, timeout=30):
             if _marks_down(exc):
                 sandbox_health.mark(url, False)
             last_exc = exc
-            log.warning("judge-server %s failed (%s: %s), trying next", url, _code(exc).name, exc.details())
+            log.warning("judge-server %s failed (%s: %s), trying next", url, grpc_errors.code_of(exc).name,
+                        grpc_errors.details_of(exc))
             continue
         DISPATCHES.labels(sandbox=label, outcome="ok").inc()
         sandbox_health.mark(url, True)

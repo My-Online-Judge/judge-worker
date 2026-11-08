@@ -39,6 +39,11 @@ class Config:
     WORKER_ID = os.getenv("POD_NAME") or os.getenv("WORKER_ID") or socket.gethostname()
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
+    # The most one Judge call may wait, however big the bundle: handler.judge_deadline_seconds adds 3 x the CPU limit
+    # per case to JUDGE_TIMEOUT_SECONDS and stops here. Keep it under MAX_POLL_INTERVAL_MS minus the MinIO sync budget
+    # (process_event runs without poll(), and a failover judges once more per sandbox) and under the containers'
+    # stop_grace_period (a SIGTERM waits for the judging in progress).
+    JUDGE_TIMEOUT_MAX_SECONDS = _int_env("JUDGE_TIMEOUT_MAX_SECONDS", 300)
     # Added to that timeout for a request that carries a checker (SP13): qduoj compiles the checker inside the first
     # such request on each sandbox (10 s CPU / 20 s real) before it judges.
     SPJ_COMPILE_ALLOWANCE_SECONDS = _int_env("SPJ_COMPILE_ALLOWANCE_SECONDS", 20)

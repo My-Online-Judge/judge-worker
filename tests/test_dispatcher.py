@@ -11,26 +11,14 @@ import handler
 import judge_server_pb2 as pb
 import sandbox_health
 import verdict
+from tests.rpc_errors import rpc_error
 
 CODE = grpc.StatusCode
 
-
-class _RpcError(grpc.RpcError):
-    """What a failed unary call raises: grpc.RpcError carrying a status code and its details."""
-
-    def __init__(self, code, details):
-        super().__init__(details)
-        self._code, self._details = code, details
-
-    def code(self):
-        return self._code
-
-    def details(self):
-        return self._details
-
-
-def rpc_error(code, details=""):
-    return _RpcError(code, details)
+# A judge response carries every case's capped output: room for the biggest bundle. A sandbox that was restarted is
+# dialled again within seconds (gRPC's own reconnect backoff would grow to 120 s).
+CHANNEL_OPTIONS = [("grpc.max_receive_message_length", 64 * 1024 * 1024),
+                   ("grpc.initial_reconnect_backoff_ms", 1000), ("grpc.max_reconnect_backoff_ms", 5000)]
 
 
 def test_token_header_is_sha256_hex():
@@ -320,8 +308,7 @@ def test_stub_keeps_one_plaintext_channel_per_address():
         dispatcher._stub("b:8080")
     assert [c.args[0] for c in insecure.call_args_list] == ["a:8080", "b:8080"]   # TLS off: plaintext
     secure.assert_not_called()
-    # A judge response carries every case's capped output: room for the biggest bundle.
-    assert insecure.call_args.kwargs["options"] == [("grpc.max_receive_message_length", 64 * 1024 * 1024)]
+    assert insecure.call_args.kwargs["options"] == CHANNEL_OPTIONS
 
 
 def test_stub_uses_a_secure_channel_with_the_workers_certificate(tls_dir):
@@ -333,7 +320,7 @@ def test_stub_uses_a_secure_channel_with_the_workers_certificate(tls_dir):
     address, credentials = secure.call_args.args
     assert address == "judge-server:8080"
     assert isinstance(credentials, grpc.ChannelCredentials)
-    assert secure.call_args.kwargs["options"] == [("grpc.max_receive_message_length", 64 * 1024 * 1024)]
+    assert secure.call_args.kwargs["options"] == CHANNEL_OPTIONS
 
 
 def test_stub_with_a_missing_certificate_raises_and_caches_nothing(tls_dir):

@@ -146,7 +146,7 @@ def judge_with_infra_retry(event, config, on_started, wait):
             reason = infra_errors.transient_reason(exc)
             if reason is None:
                 log.exception("Judging failed for %s", submission_id)
-                return system_error_event(submission_id, str(exc), id_key=id_key)
+                return system_error_event(submission_id, infra_errors.describe(exc), id_key=id_key)
             delay = next(delays)
             if time.monotonic() - began + delay > config.JUDGE_INFRA_RETRY_SECONDS:
                 log.error("Judge infrastructure (%s) still unavailable for %s after %.0f s (%r); giving up",

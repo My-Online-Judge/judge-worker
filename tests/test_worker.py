@@ -1,16 +1,20 @@
 import itertools
 from unittest.mock import ANY, MagicMock, patch
 
+import grpc
 import pytest
 from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError
 from kafka.structs import TopicPartition
 from urllib3.exceptions import MaxRetryError
-import requests
 from prometheus_client import REGISTRY
 
+import infra_errors
 import tls
 import verdict
 import worker
+from tests.rpc_errors import rpc_error
+
+UNAVAILABLE = grpc.StatusCode.UNAVAILABLE
 
 
 class Msg:
@@ -402,29 +406,57 @@ def test_a_minio_outage_is_retried_then_judged():
 def test_sandboxes_refusing_are_retried():
     producer, waits, before = MagicMock(), [], infra_retries("sandbox")
     with patch("worker.process_event",
-               side_effect=[requests.ConnectionError("refused"), {"submissionId": "s31", "status": 0}]):
+               side_effect=[rpc_error(UNAVAILABLE, "refused"), {"submissionId": "s31", "status": 0}]):
         worker.handle_one({"submissionId": "s31"}, infra_cfg(), producer, wait=waits.append)
     assert waits == [2]
     assert infra_retries("sandbox") - before == 1
     assert [v["status"] for v in verdicts(producer)] == [0]
 
 
-def test_a_read_timeout_is_not_retried():
+def test_a_deadline_exceeded_is_not_retried():
+    # the sandbox has the request and may still be judging: a second judging could double the work
     producer, waits = MagicMock(), []
-    with patch("worker.process_event", side_effect=requests.ReadTimeout("slow")):
+    with patch("worker.process_event", side_effect=rpc_error(grpc.StatusCode.DEADLINE_EXCEEDED, "Deadline Exceeded")):
         worker.handle_one({"submissionId": "s32"}, infra_cfg(), producer, wait=waits.append)
     assert waits == []
-    assert [v["status"] for v in verdicts(producer)] == [verdict.SYSTEM_ERROR]
+    sent = verdicts(producer)
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    assert sent[0]["error_message"] == "DEADLINE_EXCEEDED: Deadline Exceeded"
 
 
 def test_a_certificate_failure_is_not_retried():
     producer, waits = MagicMock(), []
-    with patch("worker.process_event", side_effect=requests.exceptions.SSLError("certificate verify failed")):
+    tls_failure = rpc_error(UNAVAILABLE, "failed to connect to all addresses; last error: Ssl handshake failed: "
+                                         "certificate verify failed")
+    with patch("worker.process_event", side_effect=tls_failure):
         worker.handle_one({"submissionId": "s36"}, infra_cfg(), producer, wait=waits.append)
     assert waits == []
     sent = verdicts(producer)
     assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
     assert "certificate verify failed" in sent[0]["error_message"]
+
+
+def test_a_refused_request_is_not_retried_and_the_submitter_sees_one_line():
+    # str(grpc.RpcError) is a multi-line debug dump: only the code and the details reach error_message
+    producer, waits = MagicMock(), []
+    refused = rpc_error(grpc.StatusCode.INVALID_ARGUMENT,
+                        "unknown seccomp rule\n\tdebug_error_string:{\"grpc_status\":3}\n")
+    with patch("worker.process_event", side_effect=refused):
+        worker.handle_one({"submissionId": "s37"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == []
+    sent = verdicts(producer)
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    message = sent[0]["error_message"]
+    assert message.startswith("INVALID_ARGUMENT: unknown seccomp rule")
+    assert "\n" not in message and len(message) <= 500
+
+
+def test_a_failure_that_is_not_grpc_is_one_capped_line_too():
+    producer = MagicMock()
+    with patch("worker.process_event", side_effect=RuntimeError("boom\n" + "x" * 2000)):
+        worker.handle_one({"submissionId": "s38"}, infra_cfg(), producer, wait=lambda s: None)
+    message = verdicts(producer)[0]["error_message"]
+    assert message.startswith("boom x") and "\n" not in message and len(message) == 500
 
 
 def test_the_retry_budget_ends_in_a_system_error():
@@ -444,6 +476,24 @@ def test_the_retry_budget_ends_in_a_system_error():
     assert sent[0]["error_message"] == "Judge infrastructure unavailable"
 
 
+def test_every_sandbox_unavailable_gives_up_after_budget():
+    producer, waits, clock, before = MagicMock(), [], [1000.0], infra_retries("sandbox")
+
+    def wait(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    with patch("worker.process_event", side_effect=rpc_error(UNAVAILABLE, "failed to connect to all addresses")), \
+            patch("worker.time.monotonic", side_effect=lambda: clock[0]):
+        worker.handle_one({"submissionId": "s39"}, infra_cfg(10), producer, wait=wait)
+    assert waits == [2, 4]                    # the next wait (8 s) would end past the 10 s budget
+    assert infra_retries("sandbox") - before == 2
+    sent = verdicts(producer)
+    assert len(sent) == 1
+    assert sent[0]["status"] == verdict.SYSTEM_ERROR
+    assert sent[0]["error_message"] == infra_errors.GIVE_UP_MESSAGE
+
+
 def test_each_retry_announces_the_start_again():
     producer = MagicMock()
     calls = itertools.count()
@@ -451,7 +501,7 @@ def test_each_retry_announces_the_start_again():
     def fake_process(event, config, on_started=None):
         on_started()
         if next(calls) < 2:
-            raise requests.ConnectionError("refused")
+            raise rpc_error(UNAVAILABLE, "refused")
         return {"submissionId": "s34", "status": 0}
 
     with patch("worker.process_event", side_effect=fake_process):
@@ -465,7 +515,7 @@ def test_run_commits_only_after_the_retried_verdict():
     producer, consumer = manager.producer, manager.consumer
     consumer.__iter__.return_value = [Msg({"submissionId": "s35"})]
     with patch("worker.process_event",
-               side_effect=[requests.ConnectionError("refused"), {"submissionId": "s35", "status": 0}]):
+               side_effect=[rpc_error(UNAVAILABLE, "refused"), {"submissionId": "s35", "status": 0}]):
         worker.run(infra_cfg(), consumer, producer)
     names = [c[0] for c in manager.mock_calls]
     assert names.index("consumer.pause") < names.index("consumer.poll") < names.index("producer.send") \
@@ -651,7 +701,7 @@ def test_after_sigterm_an_outage_of_the_sandbox_abandons_the_submission_uncommit
     producer, consumer = manager.producer, manager.consumer
     consumer.__iter__.return_value = [Msg({"submissionId": "s23"})]
     consumer.poll.side_effect = lambda **kw: (s.request(), {})[1]
-    with patch("worker.process_event", side_effect=requests.ConnectionError("refused")) as judge:
+    with patch("worker.process_event", side_effect=rpc_error(UNAVAILABLE, "refused")) as judge:
         worker.run(infra_cfg(), consumer, producer, shutdown=s)
     assert judge.call_count <= 2                  # not re-tried back to back until the grace period ends
     producer.send.assert_not_called()             # no made-up SYSTEM_ERROR for a submission that was never judged

@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 
 import config
@@ -93,6 +94,18 @@ def bundle_case_count(bundle_dir):
     return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else None
 
 
+def judge_deadline_seconds(config, max_cpu_time_ms, case_count, has_spj):
+    """The deadline of one Judge call. The sandbox judges the cases through a bounded pool, so a big bundle takes longer
+    than a small one: JUDGE_TIMEOUT_SECONDS, plus 3 x the CPU limit for every case (an unknown or empty bundle counts as
+    one case), plus the checker's compile allowance when the request carries a checker, held at
+    JUDGE_TIMEOUT_MAX_SECONDS. A flat deadline would fail a big bundle that is judging fine (DEADLINE_EXCEEDED, which is
+    not retried). A negative limit counts as 0: the sandbox refuses it by name, which a negative deadline would hide as
+    a timeout."""
+    cases_seconds = math.ceil((case_count or 1) * 3 * max(max_cpu_time_ms, 0) / 1000)
+    spj_seconds = config.SPJ_COMPILE_ALLOWANCE_SECONDS if has_spj else 0
+    return min(config.JUDGE_TIMEOUT_SECONDS + cases_seconds + spj_seconds, config.JUDGE_TIMEOUT_MAX_SECONDS)
+
+
 def process_event(event, config, on_started=None):
     key, job_id = job_identity(event) or ("submissionId", "-")
     token = submission_id_var.set(job_id)
@@ -108,10 +121,9 @@ def process_event(event, config, on_started=None):
             if on_started is not None:
                 on_started()
         request = build_judge_request(event)
-        timeout = config.JUDGE_TIMEOUT_SECONDS
-        if request.HasField("spj"):
-            # The sandbox may first have to compile the checker (Config.SPJ_COMPILE_ALLOWANCE_SECONDS).
-            timeout += config.SPJ_COMPILE_ALLOWANCE_SECONDS
+        # The sandbox may first have to compile a checker (Config.SPJ_COMPILE_ALLOWANCE_SECONDS) and then judges every
+        # case of the bundle: the deadline grows with both, up to Config.JUDGE_TIMEOUT_MAX_SECONDS.
+        timeout = judge_deadline_seconds(config, event["max_cpu_time"], expected_count, request.HasField("spj"))
         judge_response = dispatch_judge(
             config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, request, timeout=timeout,
         )

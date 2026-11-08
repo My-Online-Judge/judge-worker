@@ -37,8 +37,8 @@ def test_process_event_sets_and_resets_contextvar(monkeypatch):
     monkeypatch.setattr(handler, "dispatch_judge", lambda *a, **k: {"err": None, "data": []})
 
     class Cfg:
-        JUDGE_SERVER_URLS = ["x"]; JUDGE_SERVER_TOKEN = "t"; JUDGE_TIMEOUT_SECONDS = 1
-    event = {"submissionId": "sub-9", "test_case_id": "slug__h"}
+        JUDGE_SERVER_URLS = ["x"]; JUDGE_SERVER_TOKEN = "t"; JUDGE_TIMEOUT_SECONDS = 1; JUDGE_TIMEOUT_MAX_SECONDS = 300
+    event = {"submissionId": "sub-9", "test_case_id": "slug__h", "max_cpu_time": 1000}
 
     handler.process_event(event, Cfg())
     assert captured["during"] == "sub-9"   # set DURING processing

@@ -16,14 +16,19 @@ gọi judge-server qua gRPC (`JudgeServer.Judge`), resolve verdict, publish `sub
   dừng. Không đặt thì plaintext
 - JUDGE_SERVER_URL (default http://localhost:8080; compose: https://judge-server:8080,https://judge-server-2:8080)
 - JUDGE_SERVER_TOKEN (bắt buộc, không có default: thiếu thì worker dừng ngay khi khởi động)
-- REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS
-- SPJ_COMPILE_ALLOWANCE_SECONDS (default 20) — request có checker được chờ JUDGE_TIMEOUT_SECONDS + chừng này giây, vì
+- REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS (default 30) — phần nền của deadline mỗi lần gọi `Judge`
+- JUDGE_TIMEOUT_MAX_SECONDS (default 300) — trần của deadline đó. Deadline = JUDGE_TIMEOUT_SECONDS + số case × 3 × max_cpu_time
+  (giây, làm tròn lên; bundle không đọc được số case thì tính 1 case) + SPJ_COMPILE_ALLOWANCE_SECONDS nếu request có checker,
+  rồi cắt ở trần. Phải nhỏ hơn MAX_POLL_INTERVAL_MS trừ ngân sách MinIO, và nhỏ hơn `stop_grace_period` của container
+- SPJ_COMPILE_ALLOWANCE_SECONDS (default 20) — request có checker được cộng chừng này giây vào deadline, vì
   sandbox biên dịch checker ở lần dùng đầu (qduoj: tối đa 20 s); MAX_POLL_INTERVAL_MS mặc định
   (JUDGE_TIMEOUT_SECONDS + SPJ_COMPILE_ALLOWANCE_SECONDS) × 1000 + 30000
 - STARTED_TOPIC (default submission.started) — worker báo bắt đầu chấm trước mỗi lần dispatch; WORKER_ID (default hostname)
 - JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
-  quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Không retry
-  khi ReadTimeout (sandbox có thể đang chấm) hay lỗi chứng chỉ TLS (cấu hình sai, không tự khỏi)
+  quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Với sandbox,
+  chỉ mã gRPC UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED được chờ. Không retry khi DEADLINE_EXCEEDED (sandbox có thể đang chấm),
+  khi mã khác (INVALID_ARGUMENT, …) hay lỗi chứng chỉ TLS (UNAVAILABLE có chi tiết ssl/certificate/handshake: cấu hình sai,
+  không tự khỏi). Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết` (tối đa 500 ký tự)
 - METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total, oj_run_expired_total
 - SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker chuyển `/ping` của
   từng sandbox về registry thay cho sandbox (sandbox ở mạng internal, không tới được submission-service);

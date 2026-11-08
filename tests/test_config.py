@@ -32,10 +32,35 @@ def test_judge_timeout_seconds_good_value_is_parsed(monkeypatch):
     assert config.Config.JUDGE_TIMEOUT_SECONDS == 45
 
 
+def test_judge_timeout_max_seconds_defaults_to_300(monkeypatch):
+    monkeypatch.delenv("JUDGE_TIMEOUT_MAX_SECONDS", raising=False)
+    import config
+    importlib.reload(config)
+    assert config.Config.JUDGE_TIMEOUT_MAX_SECONDS == 300
+
+
+def test_judge_timeout_max_seconds_is_read_from_the_env(monkeypatch):
+    import config
+    try:
+        monkeypatch.setenv("JUDGE_TIMEOUT_MAX_SECONDS", "120")
+        importlib.reload(config)
+        assert config.Config.JUDGE_TIMEOUT_MAX_SECONDS == 120
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)  # later tests get the default back
+
+
+def test_judge_timeout_max_seconds_bad_value_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("JUDGE_TIMEOUT_MAX_SECONDS", "not-a-number")
+    import config
+    importlib.reload(config)
+    assert config.Config.JUDGE_TIMEOUT_MAX_SECONDS == 300
+
+
 # --- T2-5: consumer poll / rebalance tuning ---
 
 def _reload_config_clean(monkeypatch, *keep):
-    for v in ("JUDGE_TIMEOUT_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MINIO_TIMEOUT_SECONDS", "MINIO_RETRIES", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
+    for v in ("JUDGE_TIMEOUT_SECONDS", "JUDGE_TIMEOUT_MAX_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MINIO_TIMEOUT_SECONDS", "MINIO_RETRIES", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
               "SESSION_TIMEOUT_MS", "HEARTBEAT_INTERVAL_MS"):
         if v not in keep:
             monkeypatch.delenv(v, raising=False)
