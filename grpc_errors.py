@@ -14,9 +14,14 @@ RETRYABLE_CODES = frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERN
 
 
 def code_of(exc):
-    """The gRPC status code of a failed call, or None for anything that is not one."""
+    """The gRPC status code of a failed call, or None for anything that is not one (or whose code() raises or does not
+    return a grpc.StatusCode)."""
     code = getattr(exc, "code", None) if isinstance(exc, grpc.RpcError) else None
-    return code() if callable(code) else None
+    try:
+        value = code() if callable(code) else None
+    except Exception:  # a failed call is being reported: a broken code() is not worth a second failure
+        value = None
+    return value if isinstance(value, grpc.StatusCode) else None
 
 
 def details_of(exc):

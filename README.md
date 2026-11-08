@@ -26,9 +26,10 @@ gọi judge-server qua gRPC (`JudgeServer.Judge`), resolve verdict, publish `sub
 - STARTED_TOPIC (default submission.started) — worker báo bắt đầu chấm trước mỗi lần dispatch; WORKER_ID (default hostname)
 - JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
   quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Với sandbox,
-  chỉ mã gRPC UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED được chờ. Không retry khi DEADLINE_EXCEEDED (sandbox có thể đang chấm),
-  khi mã khác (INVALID_ARGUMENT, …) hay lỗi chứng chỉ TLS (UNAVAILABLE có chi tiết ssl/certificate/handshake: cấu hình sai,
-  không tự khỏi). Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết` (tối đa 500 ký tự)
+  chỉ mã gRPC UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED được chờ; UNAVAILABLE luôn được chờ, kể cả khi chi tiết nhắc TLS
+  (sandbox khởi động lại giữa lúc bắt tay TLS trông giống chứng chỉ sai). Không retry khi DEADLINE_EXCEEDED (sandbox có thể đang
+  chấm) hay mã khác (INVALID_ARGUMENT, …). Với MinIO, lỗi chứng chỉ TLS (urllib3 SSLError) là vĩnh viễn: không retry (cấu hình
+  sai, không tự khỏi). Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết` (tối đa 500 ký tự)
 - METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total, oj_run_expired_total
 - SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker chuyển `/ping` của
   từng sandbox về registry thay cho sandbox (sandbox ở mạng internal, không tới được submission-service);

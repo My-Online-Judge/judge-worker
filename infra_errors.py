@@ -1,5 +1,4 @@
 """Which judging failures are the infrastructure's, and so worth waiting out (sub-project 11)."""
-import grpc
 from minio.error import InvalidResponseError, S3Error, ServerError
 import urllib3.exceptions as u3
 from prometheus_client import Counter
@@ -13,8 +12,6 @@ DELAY_START_SECONDS = 2
 DELAY_MAX_SECONDS = 60
 # What a submitter may read of a failure in error_message: one line, at most this long.
 MAX_MESSAGE_CHARS = 500
-# Words of a TLS failure in the details of an UNAVAILABLE call (gRPC reports a failed handshake as UNAVAILABLE).
-_TLS_WORDS = ("ssl", "certificate", "handshake")
 
 
 def infra_delays():
@@ -27,16 +24,11 @@ def infra_delays():
 
 def _is_certificate_failure(exc):
     """A certificate or verification failure does not heal by waiting (a permanent misconfiguration), so it is never
-    retried: it would only burn the whole retry budget before the same SYSTEM_ERROR. For the sandbox it arrives as
-    gRPC UNAVAILABLE whose details name the handshake (ssl, certificate, handshake); for MinIO as urllib3's SSLError."""
+    retried: it would only burn the whole retry budget before the same SYSTEM_ERROR. This is MinIO's (urllib3's
+    SSLError); a gRPC failure is never one (see transient_reason)."""
     if isinstance(exc, u3.SSLError):
         return True
-    if isinstance(exc, u3.MaxRetryError) and isinstance(exc.reason, u3.SSLError):
-        return True
-    if grpc_errors.code_of(exc) is grpc.StatusCode.UNAVAILABLE:
-        details = grpc_errors.details_of(exc).lower()
-        return any(word in details for word in _TLS_WORDS)
-    return False
+    return isinstance(exc, u3.MaxRetryError) and isinstance(exc.reason, u3.SSLError)
 
 
 def transient_reason(exc):
@@ -45,6 +37,8 @@ def transient_reason(exc):
         return None
     # dispatch_judge raises a gRPC error only after every sandbox failed it with a retryable code (down or full);
     # DEADLINE_EXCEEDED is not one (the sandbox may still be judging, so a retry could judge twice), nor is any other.
+    # UNAVAILABLE is always waited out, TLS details included: a sandbox restart that cuts a handshake reads like a bad
+    # certificate, and waiting out the budget costs less than a wrong SYSTEM_ERROR.
     if grpc_errors.code_of(exc) in grpc_errors.RETRYABLE_CODES:
         return "sandbox"
     if isinstance(exc, u3.HTTPError):  # minio's transport

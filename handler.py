@@ -99,8 +99,8 @@ def judge_deadline_seconds(config, max_cpu_time_ms, case_count, has_spj):
     than a small one: JUDGE_TIMEOUT_SECONDS, plus 3 x the CPU limit for every case (an unknown or empty bundle counts as
     one case), plus the checker's compile allowance when the request carries a checker, held at
     JUDGE_TIMEOUT_MAX_SECONDS. A flat deadline would fail a big bundle that is judging fine (DEADLINE_EXCEEDED, which is
-    not retried). A negative limit counts as 0: the sandbox refuses it by name, which a negative deadline would hide as
-    a timeout."""
+    not retried). A negative limit counts as 0: the sandbox rejects a non-positive limit as INVALID_ARGUMENT, which a
+    negative deadline would hide as a timeout."""
     cases_seconds = math.ceil((case_count or 1) * 3 * max(max_cpu_time_ms, 0) / 1000)
     spj_seconds = config.SPJ_COMPILE_ALLOWANCE_SECONDS if has_spj else 0
     return min(config.JUDGE_TIMEOUT_SECONDS + cases_seconds + spj_seconds, config.JUDGE_TIMEOUT_MAX_SECONDS)

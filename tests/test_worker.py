@@ -5,7 +5,7 @@ import grpc
 import pytest
 from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError
 from kafka.structs import TopicPartition
-from urllib3.exceptions import MaxRetryError
+from urllib3.exceptions import MaxRetryError, SSLError
 from prometheus_client import REGISTRY
 
 import infra_errors
@@ -425,10 +425,9 @@ def test_a_deadline_exceeded_is_not_retried():
 
 
 def test_a_certificate_failure_is_not_retried():
+    # MinIO's certificate failure (urllib3's SSLError under a MaxRetryError) is a permanent misconfiguration
     producer, waits = MagicMock(), []
-    tls_failure = rpc_error(UNAVAILABLE, "failed to connect to all addresses; last error: Ssl handshake failed: "
-                                         "certificate verify failed")
-    with patch("worker.process_event", side_effect=tls_failure):
+    with patch("worker.process_event", side_effect=MaxRetryError(None, "/b", SSLError("certificate verify failed"))):
         worker.handle_one({"submissionId": "s36"}, infra_cfg(), producer, wait=waits.append)
     assert waits == []
     sent = verdicts(producer)
@@ -476,22 +475,40 @@ def test_the_retry_budget_ends_in_a_system_error():
     assert sent[0]["error_message"] == "Judge infrastructure unavailable"
 
 
-def test_every_sandbox_unavailable_gives_up_after_budget():
+def _unavailable_until_the_budget_ends(details, submission_id):
+    """handle_one with every sandbox UNAVAILABLE(details), a 10 s retry budget and a fake clock that only wait() moves:
+    (the waits, the retries counted, the verdicts sent)."""
     producer, waits, clock, before = MagicMock(), [], [1000.0], infra_retries("sandbox")
 
     def wait(seconds):
         waits.append(seconds)
         clock[0] += seconds
 
-    with patch("worker.process_event", side_effect=rpc_error(UNAVAILABLE, "failed to connect to all addresses")), \
+    with patch("worker.process_event", side_effect=rpc_error(UNAVAILABLE, details)), \
             patch("worker.time.monotonic", side_effect=lambda: clock[0]):
-        worker.handle_one({"submissionId": "s39"}, infra_cfg(10), producer, wait=wait)
+        worker.handle_one({"submissionId": submission_id}, infra_cfg(10), producer, wait=wait)
+    return waits, infra_retries("sandbox") - before, verdicts(producer)
+
+
+def test_every_sandbox_unavailable_gives_up_after_budget():
+    waits, retries, sent = _unavailable_until_the_budget_ends("failed to connect to all addresses", "s39")
     assert waits == [2, 4]                    # the next wait (8 s) would end past the 10 s budget
-    assert infra_retries("sandbox") - before == 2
-    sent = verdicts(producer)
+    assert retries == 2
     assert len(sent) == 1
     assert sent[0]["status"] == verdict.SYSTEM_ERROR
     assert sent[0]["error_message"] == infra_errors.GIVE_UP_MESSAGE
+
+
+@pytest.mark.parametrize("details", [
+    "failed to connect to all addresses; last error: UNKNOWN: ipv4:10.0.0.2:8080: Ssl handshake failed: "
+    "SSL_ERROR_SSL: certificate verify failed",
+    "Handshake read failed",
+])
+def test_an_unavailable_with_tls_details_is_waited_out_too(details):
+    # a sandbox restart that cuts a handshake reads like a bad certificate: retried for the whole budget
+    waits, retries, sent = _unavailable_until_the_budget_ends(details, "s44")
+    assert waits == [2, 4] and retries == 2
+    assert [(v["status"], v["error_message"]) for v in sent] == [(verdict.SYSTEM_ERROR, infra_errors.GIVE_UP_MESSAGE)]
 
 
 def test_each_retry_announces_the_start_again():

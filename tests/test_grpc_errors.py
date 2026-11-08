@@ -24,6 +24,23 @@ def test_a_non_rpc_error_with_a_code_method_has_no_code():
     assert grpc_errors.code_of(NotGrpc()) is None
 
 
+def test_a_code_that_raises_is_no_code():
+    class Broken(grpc.RpcError):
+        def code(self):
+            raise RuntimeError("gone")
+
+    assert grpc_errors.code_of(Broken()) is None
+
+
+@pytest.mark.parametrize("value", [None, "UNAVAILABLE", 14, object()])
+def test_a_code_that_is_not_a_status_code_is_no_code(value):
+    class Odd(grpc.RpcError):
+        def code(self):
+            return value
+
+    assert grpc_errors.code_of(Odd()) is None
+
+
 def test_details_of_a_failed_call():
     assert grpc_errors.details_of(rpc_error(CODE.UNAVAILABLE, "down")) == "down"
 

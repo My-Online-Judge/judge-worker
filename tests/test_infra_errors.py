@@ -80,27 +80,27 @@ def test_a_grpc_error_without_a_code_is_not_transient():
     "Handshake failed with fatal error",
     "ssl error",
 ])
-def test_grpc_tls_failure_is_not_transient(details):
-    # a certificate failure is permanent: do not burn the budget
+def test_grpc_tls_failure_is_transient(details):
+    # A sandbox restart that cuts a TLS handshake reads like a bad certificate: UNAVAILABLE is always waited out,
+    # and the retry budget costs less than a wrong SYSTEM_ERROR.
     exc = rpc_error(CODE.UNAVAILABLE, details)
-    assert infra_errors._is_certificate_failure(exc) is True
-    assert infra_errors.transient_reason(exc) is None
+    assert infra_errors._is_certificate_failure(exc) is False
+    assert infra_errors.transient_reason(exc) == "sandbox"
 
 
 @pytest.mark.parametrize("exc", [
     rpc_error(CODE.UNAVAILABLE, "failed to connect to all addresses; last error: Connection refused"),
     rpc_error(CODE.UNAVAILABLE, ""),
-    rpc_error(CODE.INTERNAL, "certificate"),         # the certificate words count only on UNAVAILABLE, the TLS code
+    rpc_error(CODE.UNAVAILABLE, "Ssl handshake failed: certificate verify failed"),   # TLS words change nothing
+    rpc_error(CODE.UNAVAILABLE, "SSL_ERROR_SSL: CERTIFICATE_VERIFY_FAILED"),
+    rpc_error(CODE.INTERNAL, "certificate"),
     rpc_error(CODE.RESOURCE_EXHAUSTED, "ssl"),
     grpc.RpcError(),
     ValueError("ssl handshake"),
 ])
-def test_other_failures_are_not_certificate_failures(exc):
+def test_a_grpc_failure_is_never_a_certificate_failure(exc):
+    # only MinIO's urllib3 SSLError is a permanent certificate failure (test_transient_reason)
     assert infra_errors._is_certificate_failure(exc) is False
-
-
-def test_the_certificate_words_are_matched_without_regard_to_case():
-    assert infra_errors._is_certificate_failure(rpc_error(CODE.UNAVAILABLE, "Ssl Handshake Failed")) is True
 
 
 def test_a_requests_error_is_no_longer_the_judge_path():

@@ -10,6 +10,7 @@ import grpc
 import pytest
 
 import dispatcher
+import infra_errors
 import judge_server_pb2 as pb
 import judge_server_pb2_grpc as pb_grpc
 import sandbox_health
@@ -128,3 +129,37 @@ def test_a_response_over_grpcs_default_4_mib_is_received(serve):
     out = dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=10)
 
     assert len(out["data"][0]["output"]) == 5 * 1024 * 1024
+
+
+# --- what the worker makes of the exceptions gRPC really raises (infra_errors) ---
+
+def test_a_real_refused_connection_is_waited_out_and_described_on_one_line(serve):
+    with pytest.raises(grpc.RpcError) as caught:
+        dispatcher.dispatch_judge([_refused_url()], "t", pb.JudgeRequest(), timeout=5)
+    exc = caught.value
+
+    assert len(str(exc).splitlines()) > 1                  # the debug dump that must not reach error_message
+    message = infra_errors.describe(exc)
+    assert message.startswith("UNAVAILABLE: ") and "Connection refused" in message
+    assert len(message.splitlines()) == 1
+    assert infra_errors.transient_reason(exc) == "sandbox"
+
+
+def test_a_real_invalid_argument_is_not_waited_out_and_described_on_one_line(serve):
+    url = serve(_Sandbox(abort=(CODE.INVALID_ARGUMENT, "unknown seccomp rule")))
+    with pytest.raises(grpc.RpcError) as caught:
+        dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5)
+    exc = caught.value
+
+    assert len(str(exc).splitlines()) > 1
+    assert infra_errors.describe(exc) == "INVALID_ARGUMENT: unknown seccomp rule"
+    assert infra_errors.transient_reason(exc) is None
+
+
+def test_a_real_unavailable_naming_the_tls_handshake_is_waited_out(serve):
+    url = serve(_Sandbox(abort=(CODE.UNAVAILABLE, "Ssl handshake failed: certificate verify failed")))
+    with pytest.raises(grpc.RpcError) as caught:
+        dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5)
+
+    assert infra_errors.transient_reason(caught.value) == "sandbox"
+    assert infra_errors.describe(caught.value) == "UNAVAILABLE: Ssl handshake failed: certificate verify failed"
