@@ -12,8 +12,8 @@ from test_case_sync import ensure_present, maybe_sweep
 
 log = logging.getLogger("judge-worker")
 
-# What the submitter sees when the problem's checker does not compile. qduoj's data is then the checker's compiler
-# output, which quotes the checker's source: it stays in the worker's log.
+# What the submitter sees when the problem's checker does not compile. The sandbox's error text is then the checker's
+# compiler output, which quotes the checker's source: it stays in the worker's log.
 SPJ_COMPILE_ERROR_MESSAGE = "SPJCompileError: the problem's checker does not compile"
 
 # A record names its job by one of these (Run code design §8): a submission by submissionId, a run by runId. The

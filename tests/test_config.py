@@ -85,19 +85,20 @@ def test_max_poll_interval_scales_with_judge_timeout(monkeypatch):
     assert c.MAX_POLL_INTERVAL_MS >= 60 * 1000 + 30000
 
 
-def test_max_poll_interval_default_is_ten_minutes(monkeypatch):
+def test_max_poll_interval_default_900s(monkeypatch):
     c = _reload_config_clean(monkeypatch)
-    assert c.SPJ_COMPILE_ALLOWANCE_SECONDS == 20
-    assert c.MAX_POLL_INTERVAL_MS == 600_000
+    assert c.MAX_POLL_INTERVAL_MS == 900_000
 
 
 def test_max_poll_interval_covers_one_attempt_that_does_not_poll(monkeypatch):
     # process_event is one stretch with no poll(): the MinIO sync (connect or read timeout, each try) and then one
-    # judge per sandbox (a failover tries them all). Kafka evicts the consumer if that exceeds the interval.
+    # judge per sandbox (a failover tries them all), each up to the deadline cap. Kafka evicts the consumer if that
+    # exceeds the interval. With the defaults and two sandboxes: 3 x 60 + 2 x 300 = 780 s, under 900 s.
     monkeypatch.setenv("JUDGE_SERVER_URL", "https://a:8080,https://b:8080")
     c = _reload_config_clean(monkeypatch, "JUDGE_SERVER_URL")
     sync = c.MINIO_TIMEOUT_SECONDS * (c.MINIO_RETRIES + 1)
-    judge = (c.JUDGE_TIMEOUT_SECONDS + c.SPJ_COMPILE_ALLOWANCE_SECONDS) * len(c.JUDGE_SERVER_URLS)
+    judge = c.JUDGE_TIMEOUT_MAX_SECONDS * len(c.JUDGE_SERVER_URLS)
+    assert sync + judge == 780
     assert c.MAX_POLL_INTERVAL_MS >= (sync + judge) * 1000
 
 

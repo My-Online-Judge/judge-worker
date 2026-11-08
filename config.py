@@ -27,10 +27,13 @@ class Config:
 
     KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
     JUDGE_SERVER_URL = os.getenv("JUDGE_SERVER_URL", "http://localhost:8080")
-    # Comma-separated list of judge-server base URLs; the dispatcher round-robins across them and
-    # fails over to the next on connection error / 5xx. A single URL is the common case.
+    # Comma-separated list of the sandboxes' gRPC addresses, each `host:port` or `https://host:port` (an http:// or
+    # https:// scheme is dropped: OJ_TLS_DIR, not the scheme, picks TLS; addresses.parse_address, which validate()
+    # applies to every entry). The dispatcher round-robins across them and fails over to the next on the gRPC codes
+    # UNAVAILABLE, INTERNAL and RESOURCE_EXHAUSTED (grpc_errors.RETRYABLE_CODES). A single address is the common case.
     JUDGE_SERVER_URLS = [u.strip() for u in JUDGE_SERVER_URL.split(",") if u.strip()]
-    # The sandboxes' shared secret (its sha256 goes in X-Judge-Server-Token). No default: validate() stops the worker.
+    # The sandboxes' shared secret (its sha256 goes in the x-judge-server-token metadata of every gRPC call, and in the
+    # X-JUDGE-SERVER-TOKEN header of the heartbeat relay). No default: validate() stops the worker.
     JUDGE_SERVER_TOKEN = os.getenv("JUDGE_SERVER_TOKEN", "")
     REQUESTED_TOPIC = os.getenv("REQUESTED_TOPIC", "submission.requested")
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
@@ -40,14 +43,16 @@ class Config:
     # event name the pod that produced them; else WORKER_ID, else the container's hostname (compose).
     WORKER_ID = os.getenv("POD_NAME") or os.getenv("WORKER_ID") or socket.gethostname()
     CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "judge-workers")
+    # The base of the deadline (the gRPC timeout) of one Judge call; handler.judge_deadline_seconds adds the per-case
+    # and the checker's share to it, up to JUDGE_TIMEOUT_MAX_SECONDS.
     JUDGE_TIMEOUT_SECONDS = _int_env("JUDGE_TIMEOUT_SECONDS", DEFAULT_JUDGE_TIMEOUT_SECONDS)
     # The most one Judge call may wait, however big the bundle: handler.judge_deadline_seconds adds 3 x the CPU limit
     # per case to JUDGE_TIMEOUT_SECONDS and stops here. Keep it under MAX_POLL_INTERVAL_MS minus the MinIO sync budget
-    # (process_event runs without poll(), and a failover judges once more per sandbox) and under the containers'
-    # stop_grace_period (a SIGTERM waits for the judging in progress).
+    # (process_event runs without poll(), and a failover judges once more per sandbox; see MAX_POLL_INTERVAL_MS) and
+    # under the containers' stop_grace_period (a SIGTERM waits for the judging in progress, then for the publish).
     JUDGE_TIMEOUT_MAX_SECONDS = _int_env("JUDGE_TIMEOUT_MAX_SECONDS", 300)
-    # Added to that timeout for a request that carries a checker (SP13): qduoj compiles the checker inside the first
-    # such request on each sandbox (10 s CPU / 20 s real) before it judges.
+    # Added to that timeout for a request that carries a checker (SP13): the sandbox compiles the checker inside the
+    # first such request on each sandbox for a spj_version (10 s CPU / 20 s real) before it judges.
     SPJ_COMPILE_ALLOWANCE_SECONDS = _int_env("SPJ_COMPILE_ALLOWANCE_SECONDS", 20)
     # How long one verdict publish waits for Kafka's acknowledgement before it is sent again (sub-project 7 §3.2).
     PUBLISH_TIMEOUT_SECONDS = _int_env("PUBLISH_TIMEOUT_SECONDS", 10)
@@ -69,11 +74,13 @@ class Config:
     MAX_POLL_RECORDS = _int_env("MAX_POLL_RECORDS", 1)
     # Before Kafka decides we are stuck and rebalances our partitions away (a second worker then judges the same
     # submission). process_event is one stretch with no poll(): the MinIO sync (up to MINIO_TIMEOUT_SECONDS per try,
-    # MINIO_RETRIES + 1 tries) and then one judge per sandbox when a failover happens (JUDGE_TIMEOUT_SECONDS plus a
-    # checker's compile each). With the defaults that is about 3 x 60 + 2 x 50 = 280 s; 10 minutes leaves room for a
-    # slow node. The waits for Kafka, MinIO or a sandbox that is away poll() in 1 s slices (worker.run), so they do not
-    # count against this.
-    MAX_POLL_INTERVAL_MS = _int_env("MAX_POLL_INTERVAL_MS", 600000)
+    # MINIO_RETRIES + 1 tries: 3 x 60 = 180 s) and then, when a failover happens, one Judge call per sandbox, each up
+    # to JUDGE_TIMEOUT_MAX_SECONDS (a sandbox that dies mid-judge fails its call late, and the next sandbox judges
+    # again). With the defaults and two sandboxes that is 180 + 2 x 300 = 780 s; 15 minutes leaves room for a slow
+    # node. Each further sandbox in JUDGE_SERVER_URL adds up to JUDGE_TIMEOUT_MAX_SECONDS: raise this, or lower the
+    # cap, with three. The waits for Kafka, MinIO or a sandbox that is away poll() in 1 s slices (worker.run), so they
+    # do not count against this.
+    MAX_POLL_INTERVAL_MS = _int_env("MAX_POLL_INTERVAL_MS", 900000)
     # Liveness heartbeat runs on a background thread (independent of poll); keep the heartbeat
     # comfortably below the session timeout as Kafka requires.
     SESSION_TIMEOUT_MS = _int_env("SESSION_TIMEOUT_MS", 30000)
