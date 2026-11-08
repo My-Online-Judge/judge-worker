@@ -103,11 +103,12 @@ def _install(tmp_path, umask, files=None):
 
 @pytest.mark.parametrize("umask", [0o000, 0o022, 0o077], ids=lambda u: f"umask{u:03o}")
 def test_installed_bundle_is_readable_by_the_spj_user(tmp_path, monkeypatch, umask):
-    # A checker bundle ("spj": true in info). qduoj runs the checker as spj (uid 12003, primary group 12003), and the
-    # checker opens argv[1] = /test_case/<id>/<n>.in itself; a submission runs as code (uid 12002), which is not in
-    # group 12003. So the directory and the inputs go to group 12003 (the worker joins it: compose group_add), while the
-    # expected outputs and info stay the owner's only (root reads them in the sandbox, through DAC_OVERRIDE). The modes
-    # do not depend on the umask. A test run is not in group 12003, so os.chown is recorded here, not made.
+    # A checker bundle ("spj": true in info). The Go judge-server runs the checker as spj (uid 12003) with the slot's
+    # group, and the checker opens argv[1] = /test_case/<id>/<n>.in itself; a submission runs as a per-slot user (uids
+    # 12100-12107), which is not in group 12003. So the directory and the inputs go to group 12003 (the worker joins
+    # it: compose group_add), while the expected outputs and info stay the owner's only (root reads them in the
+    # sandbox, through DAC_OVERRIDE). The modes do not depend on the umask. A test run is not in
+    # group 12003, so os.chown is recorded here, not made.
     chowns = []
     monkeypatch.setattr(os, "chown", lambda path, uid, gid: chowns.append((_changed(path), uid, gid)))
 
@@ -123,9 +124,10 @@ def test_installed_bundle_is_readable_by_the_spj_user(tmp_path, monkeypatch, uma
                          ids=["no-spj-key", "spj-false"])
 @pytest.mark.parametrize("umask", [0o000, 0o022], ids=lambda u: f"umask{u:03o}")
 def test_plain_bundle_stays_private_to_the_worker(tmp_path, monkeypatch, info, umask):
-    # Without a checker only root reads a bundle in the sandbox: qduoj opens a run's stdin as root before it drops to
-    # code (12002), and compares the output as root. mkdtemp's 0700 directory is what keeps a submission away from the
-    # expected outputs, so the worker changes no owner and no mode, as before SP13.
+    # Without a checker only root reads a bundle in the sandbox: the Go judge-server opens a run's stdin as root before
+    # it drops to the slot's user (uids 12100-12107), and compares the output as root. mkdtemp's 0700 directory is
+    # what keeps a submission away from the expected outputs, so the worker changes no owner and no mode, as before
+    # SP13.
     changes = []
     real_chmod = os.chmod
     monkeypatch.setattr(os, "chown", lambda path, uid, gid: changes.append(("chown", _changed(path), uid, gid)))

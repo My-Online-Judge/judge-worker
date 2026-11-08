@@ -61,5 +61,5 @@ và `JUDGE_INFRA_RETRY_SECONDS=30`, không MinIO, không heartbeat relay.
 ## Bộ test trong /test_case
 Bài không có checker: thư mục bộ test giữ 0700, chỉ root của sandbox đọc được. Bài có checker (`"spj": true` trong
 `info`): thư mục và các `*.in` thuộc group 12003 (group của user `spj` (uid 12003) của sandbox, user chạy checker), 0750 / 0640; `*.out` và `info`
-0600. Bài nộp chạy với user `code` (12002), không đọc được gì trong bộ test. Vì vậy worker phải ở trong group 12003:
+0600. Bài nộp chạy với user riêng của từng slot (uid 12100-12107), checker chạy với user `spj` (uid 12003) và group của slot; bài nộp không đọc được gì trong bộ test. Vì vậy worker phải ở trong group 12003:
 compose đặt `group_add: ["12003"]`; chạy ngoài compose thì `docker run --group-add 12003`.

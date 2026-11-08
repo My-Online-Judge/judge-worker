@@ -24,8 +24,9 @@ def _safe_extract_zip(zip_path, dest_dir):
         zf.extractall(dest_dir)
 
 
-# The sandbox's checker user spj (uid 12003) has primary group 12003; a submission runs as code (uid 12002), which is
-# not in that group. The worker joins it (compose group_add), so it may give its own files to the group.
+# The sandbox's checker user spj (uid 12003) has primary group 12003, and the checker runs with the slot's group; a
+# submission runs as a per-slot user (uids 12100-12107), which is not in group 12003. The worker joins group 12003
+# (compose group_add), so it may give its own files to the group.
 SPJ_GID = 12003
 
 

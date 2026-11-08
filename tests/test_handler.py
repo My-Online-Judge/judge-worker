@@ -34,7 +34,7 @@ def test_compile_error_is_still_a_compile_error():
 
 
 def test_spj_compile_error_is_a_system_error_without_the_checker_output(caplog):
-    # qduoj's data is the checker's compiler output, which quotes the checker's source.
+    # The sandbox's data is the checker's compiler output, which quotes the checker's source.
     resp = {"err": "SPJCompileError", "data": "spj.cpp:3: error: 'expected' was not declared in this scope"}
     with caplog.at_level(logging.WARNING, logger="judge-worker"):
         out = handler.build_judged_event("sub-4", resp)
@@ -75,8 +75,8 @@ def test_process_event_dispatches_to_judge_servers(monkeypatch):
 
 
 def test_checker_requests_get_the_compile_allowance():
-    # qduoj compiles a checker inside the first request that needs it on each sandbox (up to 20 s real), on top of the
-    # judging itself; a read timeout would end the submission in SYSTEM_ERROR.
+    # The Go judge-server compiles a checker inside the first request that needs it on each sandbox (up to 20 s real),
+    # on top of the judging itself; a read timeout would end the submission in SYSTEM_ERROR.
     plain = {"submissionId": "sub-10", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
              "test_case_id": "p__h", "output": True}
     checker = {**plain, "submissionId": "sub-11", "spj_version": "ab12", "spj_config": {}, "spj_compile_config": {},
