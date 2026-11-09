@@ -6,9 +6,9 @@ import grpc
 # (RESOURCE_EXHAUSTED). dispatcher fails over to the next sandbox on these, and infra_errors treats the one it raises
 # after the last sandbox failed as the infrastructure being away. Every other code is not: INVALID_ARGUMENT,
 # NOT_FOUND, UNAUTHENTICATED and PERMISSION_DENIED are deterministic (the same request fails everywhere), and
-# DEADLINE_EXCEEDED means the sandbox has the request and is still judging (it cancels the job when the call ends), so
-# a second sandbox, or a second judging, would judge the same submission again, doubling the CPU exactly when the
-# sandboxes are busiest.
+# DEADLINE_EXCEEDED is never retried or failed over: the call may be running or queued on that sandbox, so a retry
+# could judge twice. The deployment sets the sandbox's MAX_QUEUE=0, so a full sandbox answers RESOURCE_EXHAUSTED at once
+# instead of queueing.
 RETRYABLE_CODES = frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL,
                              grpc.StatusCode.RESOURCE_EXHAUSTED})
 

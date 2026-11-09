@@ -21,6 +21,9 @@ TOKEN_METADATA_KEY = "x-judge-server-token"
 _MAX_RECEIVE_BYTES = 64 * 1024 * 1024
 _INITIAL_RECONNECT_BACKOFF_MS = 1000
 _MAX_RECONNECT_BACKOFF_MS = 5000
+# gRPC re-resolves a DNS name at most every 30 s by default, so a sandbox recreated on a new IP (both swapping at once)
+# is refused as "Peer name judge-server is not in peer certificate" for over a minute: re-resolve at most 1 s apart.
+_DNS_MIN_RESOLUTION_MS = 1000
 
 # The codes dispatch_judge fails over on (grpc_errors.RETRYABLE_CODES: not up, TLS handshake failed, judger failure
 # before any case ran, or busy); every other code is raised at once.
@@ -35,7 +38,8 @@ _round_robin = itertools.count()
 
 # One gRPC channel per sandbox address, for the life of the process: a channel multiplexes calls and reconnects by
 # itself, retrying a sandbox that went away after at most _MAX_RECONNECT_BACKOFF_MS (gRPC's default backoff grows to
-# 120 s, so a restarted sandbox would be refused for minutes).
+# 120 s, so a restarted sandbox would be refused for minutes) and re-resolving its name after a failure, at most once
+# per _DNS_MIN_RESOLUTION_MS.
 _channels = {}
 _channels_lock = threading.Lock()
 
@@ -149,7 +153,8 @@ def _channel(address):
         if channel is None:
             options = [("grpc.max_receive_message_length", _MAX_RECEIVE_BYTES),
                        ("grpc.initial_reconnect_backoff_ms", _INITIAL_RECONNECT_BACKOFF_MS),
-                       ("grpc.max_reconnect_backoff_ms", _MAX_RECONNECT_BACKOFF_MS)]
+                       ("grpc.max_reconnect_backoff_ms", _MAX_RECONNECT_BACKOFF_MS),
+                       ("grpc.dns_min_time_between_resolutions_ms", _DNS_MIN_RESOLUTION_MS)]
             credentials = tls.grpc_channel_credentials()
             if credentials is None:
                 channel = grpc.insecure_channel(address, options=options)

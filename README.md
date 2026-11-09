@@ -21,7 +21,8 @@ Sandbox chưa có `JudgeStream` (UNIMPLEMENTED) thì worker gọi lại `Judge` 
   `https://host:port`: tiền tố `http://` / `https://` bị bỏ, TLS do OJ_TLS_DIR quyết định chứ không do tiền tố. Không được có
   path, host rỗng hay port sai: worker dừng ngay khi khởi động với `invalid JUDGE_SERVER_URL entry: …` thay vì lỗi ở từng bài nộp.
   Worker round-robin giữa các sandbox và chuyển sang sandbox kế khi `Judge` trả mã gRPC UNAVAILABLE, INTERNAL hoặc
-  RESOURCE_EXHAUSTED; mã khác (INVALID_ARGUMENT, DEADLINE_EXCEEDED, …) được trả lên ngay, không failover
+  RESOURCE_EXHAUSTED; mã khác (INVALID_ARGUMENT, DEADLINE_EXCEEDED, …) được trả lên ngay, không failover. Sandbox đã đầy trả
+  RESOURCE_EXHAUSTED ngay (deployment đặt `MAX_QUEUE=0`, không xếp hàng chờ), còn DEADLINE_EXCEEDED thì không retry
 - JUDGE_SERVER_TOKEN (bắt buộc, không có default: thiếu thì worker dừng ngay khi khởi động)
 - REQUESTED_TOPIC / JUDGED_TOPIC / CONSUMER_GROUP / JUDGE_TIMEOUT_SECONDS (default 30) — phần nền của deadline mỗi lần gọi `Judge`
 - JUDGE_TIMEOUT_MAX_SECONDS (default 300) — trần của deadline đó. Deadline = JUDGE_TIMEOUT_SECONDS + số case × 3 × max_cpu_time

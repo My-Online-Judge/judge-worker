@@ -16,9 +16,11 @@ from tests.rpc_errors import rpc_error
 CODE = grpc.StatusCode
 
 # A judge response carries every case's capped output: room for the biggest bundle. A sandbox that was restarted is
-# dialled again within seconds (gRPC's own reconnect backoff would grow to 120 s).
+# dialled again within seconds (gRPC's own reconnect backoff would grow to 120 s), and a recreated one that came back on
+# another IP is found within a second (gRPC re-resolves DNS at most every 30 s by default).
 CHANNEL_OPTIONS = [("grpc.max_receive_message_length", 64 * 1024 * 1024),
-                   ("grpc.initial_reconnect_backoff_ms", 1000), ("grpc.max_reconnect_backoff_ms", 5000)]
+                   ("grpc.initial_reconnect_backoff_ms", 1000), ("grpc.max_reconnect_backoff_ms", 5000),
+                   ("grpc.dns_min_time_between_resolutions_ms", 1000)]
 
 
 def test_token_header_is_sha256_hex():
