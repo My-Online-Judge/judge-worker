@@ -2,7 +2,7 @@
 it; dispatch reads it to try the healthy sandboxes first, and oj_sandbox_up exposes it. Process-wide, like the
 dispatcher's round-robin counter."""
 import threading
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 from prometheus_client import Gauge
 
@@ -14,8 +14,9 @@ _down = set()
 
 
 def sandbox_label(url):
-    """The sandbox's hostname (judge-server-2), as the registry and the alerts name it."""
-    return urlparse(url).hostname or url
+    """The sandbox's hostname (judge-server-2), as the registry and the alerts name it, for a configured URL
+    (https://judge-server-2:8080), a gRPC target (judge-server-2:8080) or a bare host."""
+    return urlsplit(url if "//" in url else "//" + url).hostname or url
 
 
 def mark(url, up):

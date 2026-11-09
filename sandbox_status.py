@@ -2,40 +2,60 @@
 registry on the sandbox's behalf.
 
 The sandboxes run untrusted code, so they sit on an internal network with no route to submission-service. The worker
-reaches both: it asks each sandbox for its /ping (the same server_info QingdaoU's own heartbeat sends), marks the
-sandbox up or down in sandbox_health (dispatch tries the healthy ones first; oj_sandbox_up reads the same marks), and
-forwards the answer as that sandbox's heartbeat when SANDBOX_HEARTBEAT_URL is set. A sandbox that stops answering is
-marked down at once and simply stops being reported; the registry marks it offline after its 30 s window.
+reaches both: it calls each sandbox's gRPC Ping (the hostname, version, cpu_core, cpu and memory QingdaoU's own heartbeat
+sends, plus running_jobs and max_jobs), marks the sandbox up or down in sandbox_health (dispatch tries the healthy ones
+first; oj_sandbox_up reads the same marks), and forwards the answer as that sandbox's heartbeat when
+SANDBOX_HEARTBEAT_URL is set. A sandbox that stops answering is marked down at once and simply stops being reported; the
+registry marks it offline after its 30 s window.
 """
 import logging
 import threading
 import time
 
+import grpc
 import requests
 
+import dispatcher
+import grpc_errors
+import judge_server_pb2 as pb
 import sandbox_health
 import tls
-from dispatcher import token_header
 
 log = logging.getLogger("judge-worker")
 
 
+def ping(address, token, timeout):
+    """JudgeServer.Ping on the sandbox at `address` (host:port, dispatcher.parse_address), as the dict the registry's
+    heartbeat carries: the PingResponse's fields plus action "pong". `timeout` is the call's deadline in seconds. Raises
+    grpc.RpcError when the call fails (not up, TLS handshake failed, deadline passed, token refused)."""
+    response = dispatcher._stub(address).Ping(
+        pb.PingRequest(), timeout=timeout, metadata=[(dispatcher.TOKEN_METADATA_KEY, dispatcher.token_header(token))])
+    return {"hostname": response.hostname, "judger_version": response.judger_version, "cpu_core": response.cpu_core,
+            "cpu": response.cpu, "memory": response.memory, "running_jobs": response.running_jobs,
+            "max_jobs": response.max_jobs, "action": "pong"}
+
+
+def _why(exc):
+    """One line for the log: a failed call as `CODE: details`, anything else as its own text."""
+    code = grpc_errors.code_of(exc)
+    return f"{code.name}: {grpc_errors.details_of(exc)}" if code else str(exc)
+
+
 def report_once(urls, token, heartbeat_url, timeout=3, *, tls_kwargs=None):
-    """One round. tls_kwargs: tls.requests_kwargs(), read once by start(); the sandboxes and submission-service both
-    require the worker's certificate."""
+    """One round. tls_kwargs: tls.requests_kwargs(), read once by start(); submission-service requires the worker's
+    certificate on the heartbeat (each sandbox's channel presents it by itself, dispatcher._channel)."""
     tls_kwargs = tls_kwargs or {}
-    digest = token_header(token)
+    digest = dispatcher.token_header(token)
     for url in urls:
         try:
-            pong = requests.post(f"{url}/ping", json={}, headers={"X-Judge-Server-Token": digest}, timeout=timeout,
-                                 **tls_kwargs)
-            pong.raise_for_status()
-            info = dict(pong.json()["data"])
-        # OSError: requests' RequestException is one, and so is what requests raises for a certificate file that is gone
-        # (no request sent). Either way this sandbox is unreachable: marked down, and the round goes on to the next.
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+            info = ping(dispatcher.parse_address(url), token, timeout)
+        # RpcError: the call failed. ValueError: not a host:port. OSError, RuntimeError: no channel can be opened because
+        # a certificate file is gone (tls.paths raises RuntimeError for a missing one, the read an OSError for an
+        # unreadable one; no call is made). Either way this sandbox is unreachable: marked down, and the round goes on to
+        # the next.
+        except (grpc.RpcError, ValueError, OSError, RuntimeError) as exc:
             sandbox_health.mark(url, False)
-            log.warning("sandbox %s: no answer to /ping (%s)", url, exc)
+            log.warning("sandbox %s: no answer to Ping (%s)", url, _why(exc))
             continue
         sandbox_health.mark(url, True)
         if not heartbeat_url:
@@ -55,6 +75,7 @@ def start(config):
     if not config.JUDGE_SERVER_URLS:
         return None
     tls_kwargs = tls.requests_kwargs()
+    tls.grpc_channel_credentials()  # the channels to the sandboxes read the same files at first use: fail closed here too
 
     def loop():
         while True:

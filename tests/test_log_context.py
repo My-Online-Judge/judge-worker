@@ -24,20 +24,21 @@ def test_filter_defaults_to_dash_when_unset():
 
 def test_process_event_sets_and_resets_contextvar(monkeypatch):
     import handler
+    from judge_server_pb2 import JudgeRequest
     from log_context import submission_id_var
     captured = {}
     # stub the judging pipeline so process_event runs without a live stack
     monkeypatch.setattr(handler, "maybe_sweep", lambda: None)
     monkeypatch.setattr(handler, "ensure_present", lambda tcid: None)
-    def capture_body(e):
+    def capture_request(e):
         captured["during"] = submission_id_var.get()
-        return {}
-    monkeypatch.setattr(handler, "build_judge_body", capture_body)
+        return JudgeRequest()
+    monkeypatch.setattr(handler, "build_judge_request", capture_request)
     monkeypatch.setattr(handler, "dispatch_judge", lambda *a, **k: {"err": None, "data": []})
 
     class Cfg:
-        JUDGE_SERVER_URLS = ["x"]; JUDGE_SERVER_TOKEN = "t"; JUDGE_TIMEOUT_SECONDS = 1
-    event = {"submissionId": "sub-9", "test_case_id": "slug__h"}
+        JUDGE_SERVER_URLS = ["x"]; JUDGE_SERVER_TOKEN = "t"; JUDGE_TIMEOUT_SECONDS = 1; JUDGE_TIMEOUT_MAX_SECONDS = 300
+    event = {"submissionId": "sub-9", "test_case_id": "slug__h", "max_cpu_time": 1000}
 
     handler.process_event(event, Cfg())
     assert captured["during"] == "sub-9"   # set DURING processing

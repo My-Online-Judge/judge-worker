@@ -32,10 +32,35 @@ def test_judge_timeout_seconds_good_value_is_parsed(monkeypatch):
     assert config.Config.JUDGE_TIMEOUT_SECONDS == 45
 
 
+def test_judge_timeout_max_seconds_defaults_to_300(monkeypatch):
+    monkeypatch.delenv("JUDGE_TIMEOUT_MAX_SECONDS", raising=False)
+    import config
+    importlib.reload(config)
+    assert config.Config.JUDGE_TIMEOUT_MAX_SECONDS == 300
+
+
+def test_judge_timeout_max_seconds_is_read_from_the_env(monkeypatch):
+    import config
+    try:
+        monkeypatch.setenv("JUDGE_TIMEOUT_MAX_SECONDS", "120")
+        importlib.reload(config)
+        assert config.Config.JUDGE_TIMEOUT_MAX_SECONDS == 120
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)  # later tests get the default back
+
+
+def test_judge_timeout_max_seconds_bad_value_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("JUDGE_TIMEOUT_MAX_SECONDS", "not-a-number")
+    import config
+    importlib.reload(config)
+    assert config.Config.JUDGE_TIMEOUT_MAX_SECONDS == 300
+
+
 # --- T2-5: consumer poll / rebalance tuning ---
 
 def _reload_config_clean(monkeypatch, *keep):
-    for v in ("JUDGE_TIMEOUT_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MINIO_TIMEOUT_SECONDS", "MINIO_RETRIES", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
+    for v in ("JUDGE_TIMEOUT_SECONDS", "JUDGE_TIMEOUT_MAX_SECONDS", "SPJ_COMPILE_ALLOWANCE_SECONDS", "MINIO_TIMEOUT_SECONDS", "MINIO_RETRIES", "MAX_POLL_RECORDS", "MAX_POLL_INTERVAL_MS",
               "SESSION_TIMEOUT_MS", "HEARTBEAT_INTERVAL_MS"):
         if v not in keep:
             monkeypatch.delenv(v, raising=False)
@@ -60,19 +85,20 @@ def test_max_poll_interval_scales_with_judge_timeout(monkeypatch):
     assert c.MAX_POLL_INTERVAL_MS >= 60 * 1000 + 30000
 
 
-def test_max_poll_interval_default_is_ten_minutes(monkeypatch):
+def test_max_poll_interval_default_900s(monkeypatch):
     c = _reload_config_clean(monkeypatch)
-    assert c.SPJ_COMPILE_ALLOWANCE_SECONDS == 20
-    assert c.MAX_POLL_INTERVAL_MS == 600_000
+    assert c.MAX_POLL_INTERVAL_MS == 900_000
 
 
 def test_max_poll_interval_covers_one_attempt_that_does_not_poll(monkeypatch):
     # process_event is one stretch with no poll(): the MinIO sync (connect or read timeout, each try) and then one
-    # judge per sandbox (a failover tries them all). Kafka evicts the consumer if that exceeds the interval.
+    # judge per sandbox (a failover tries them all), each up to the deadline cap. Kafka evicts the consumer if that
+    # exceeds the interval. With the defaults and two sandboxes: 3 x 60 + 2 x 300 = 780 s, under 900 s.
     monkeypatch.setenv("JUDGE_SERVER_URL", "https://a:8080,https://b:8080")
     c = _reload_config_clean(monkeypatch, "JUDGE_SERVER_URL")
     sync = c.MINIO_TIMEOUT_SECONDS * (c.MINIO_RETRIES + 1)
-    judge = (c.JUDGE_TIMEOUT_SECONDS + c.SPJ_COMPILE_ALLOWANCE_SECONDS) * len(c.JUDGE_SERVER_URLS)
+    judge = c.JUDGE_TIMEOUT_MAX_SECONDS * len(c.JUDGE_SERVER_URLS)
+    assert sync + judge == 780
     assert c.MAX_POLL_INTERVAL_MS >= (sync + judge) * 1000
 
 
@@ -137,6 +163,64 @@ def test_validate_requires_token(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(config)  # later tests get the session's token back
+
+
+@pytest.mark.parametrize("value, bad", [
+    ("https://judge-server:8080/judge", "https://judge-server:8080/judge"),
+    ("http://a:8080/", "http://a:8080/"),
+    ("https://:8080", "https://:8080"),
+    ("a:notaport", "a:notaport"),
+    ("a:0", "a:0"),
+    # the first bad entry is the one named, wherever it sits in the list
+    ("https://a:8080, http://b:8080/ping ,http://c:8080/x", "http://b:8080/ping"),
+])
+def test_validate_rejects_a_malformed_judge_server_url(monkeypatch, value, bad):
+    # A malformed address would fail every submission (dispatch_judge raises ValueError): the worker refuses to start.
+    import config
+    try:
+        monkeypatch.setenv("JUDGE_SERVER_TOKEN", "secret")
+        monkeypatch.setenv("JUDGE_SERVER_URL", value)
+        importlib.reload(config)
+        with pytest.raises(SystemExit) as exc_info:
+            config.Config.validate()
+        message = str(exc_info.value)
+        assert message.startswith(f"invalid JUDGE_SERVER_URL entry: {bad} (")
+        assert message.endswith(")")
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+@pytest.mark.parametrize("value", [
+    "judge-server:8080",
+    "https://judge-server:8080",
+    "http://localhost:8080",
+    "https://judge-server:8080,judge-server-2:8080, http://10.0.0.3:9090",
+])
+def test_validate_accepts_both_address_forms(monkeypatch, value):
+    # host:port and https://host:port (compose) are both a gRPC target; mixing them in one list is fine.
+    import config
+    try:
+        monkeypatch.setenv("JUDGE_SERVER_TOKEN", "secret")
+        monkeypatch.setenv("JUDGE_SERVER_URL", value)
+        importlib.reload(config)
+        assert config.Config.validate() is None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+def test_validate_checks_the_token_before_the_addresses(monkeypatch):
+    import config
+    try:
+        monkeypatch.delenv("JUDGE_SERVER_TOKEN", raising=False)
+        monkeypatch.setenv("JUDGE_SERVER_URL", "http://a:8080/judge")
+        importlib.reload(config)
+        with pytest.raises(SystemExit, match="^missing required env: JUDGE_SERVER_TOKEN$"):
+            config.Config.validate()
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
 
 
 def test_worker_id_prefers_pod_name_then_worker_id_then_hostname(monkeypatch):

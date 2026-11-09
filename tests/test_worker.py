@@ -1,16 +1,20 @@
 import itertools
 from unittest.mock import ANY, MagicMock, patch
 
+import grpc
 import pytest
 from kafka.errors import CommitFailedError, KafkaError, KafkaTimeoutError, MessageSizeTooLargeError
 from kafka.structs import TopicPartition
-from urllib3.exceptions import MaxRetryError
-import requests
+from urllib3.exceptions import MaxRetryError, SSLError
 from prometheus_client import REGISTRY
 
+import infra_errors
 import tls
 import verdict
 import worker
+from tests.rpc_errors import rpc_error
+
+UNAVAILABLE = grpc.StatusCode.UNAVAILABLE
 
 
 class Msg:
@@ -274,7 +278,7 @@ def test_started_event_shape():
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
                     PUBLISH_TIMEOUT_SECONDS=10)
 
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         return {"submissionId": "s20", "status": 0}
 
@@ -304,7 +308,7 @@ def test_a_failed_start_publish_does_not_stop_judging():
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
                     PUBLISH_TIMEOUT_SECONDS=10)
 
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         return {"submissionId": "s21", "status": 0}
 
@@ -327,7 +331,7 @@ def sent_on(producer, topic):
 
 
 def judged_after_start(submission_id):
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         return {"submissionId": submission_id, "status": 0}
     return fake_process
@@ -402,29 +406,56 @@ def test_a_minio_outage_is_retried_then_judged():
 def test_sandboxes_refusing_are_retried():
     producer, waits, before = MagicMock(), [], infra_retries("sandbox")
     with patch("worker.process_event",
-               side_effect=[requests.ConnectionError("refused"), {"submissionId": "s31", "status": 0}]):
+               side_effect=[rpc_error(UNAVAILABLE, "refused"), {"submissionId": "s31", "status": 0}]):
         worker.handle_one({"submissionId": "s31"}, infra_cfg(), producer, wait=waits.append)
     assert waits == [2]
     assert infra_retries("sandbox") - before == 1
     assert [v["status"] for v in verdicts(producer)] == [0]
 
 
-def test_a_read_timeout_is_not_retried():
+def test_a_deadline_exceeded_is_not_retried():
+    # the sandbox has the request and may still be judging: a second judging could double the work
     producer, waits = MagicMock(), []
-    with patch("worker.process_event", side_effect=requests.ReadTimeout("slow")):
+    with patch("worker.process_event", side_effect=rpc_error(grpc.StatusCode.DEADLINE_EXCEEDED, "Deadline Exceeded")):
         worker.handle_one({"submissionId": "s32"}, infra_cfg(), producer, wait=waits.append)
     assert waits == []
-    assert [v["status"] for v in verdicts(producer)] == [verdict.SYSTEM_ERROR]
+    sent = verdicts(producer)
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    assert sent[0]["error_message"] == "DEADLINE_EXCEEDED: Deadline Exceeded"
 
 
 def test_a_certificate_failure_is_not_retried():
+    # MinIO's certificate failure (urllib3's SSLError under a MaxRetryError) is a permanent misconfiguration
     producer, waits = MagicMock(), []
-    with patch("worker.process_event", side_effect=requests.exceptions.SSLError("certificate verify failed")):
+    with patch("worker.process_event", side_effect=MaxRetryError(None, "/b", SSLError("certificate verify failed"))):
         worker.handle_one({"submissionId": "s36"}, infra_cfg(), producer, wait=waits.append)
     assert waits == []
     sent = verdicts(producer)
     assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
     assert "certificate verify failed" in sent[0]["error_message"]
+
+
+def test_a_refused_request_is_not_retried_and_the_submitter_sees_one_line():
+    # str(grpc.RpcError) is a multi-line debug dump: only the code and the details reach error_message
+    producer, waits = MagicMock(), []
+    refused = rpc_error(grpc.StatusCode.INVALID_ARGUMENT,
+                        "unknown seccomp rule\n\tdebug_error_string:{\"grpc_status\":3}\n")
+    with patch("worker.process_event", side_effect=refused):
+        worker.handle_one({"submissionId": "s37"}, infra_cfg(), producer, wait=waits.append)
+    assert waits == []
+    sent = verdicts(producer)
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    message = sent[0]["error_message"]
+    assert message.startswith("INVALID_ARGUMENT: unknown seccomp rule")
+    assert "\n" not in message and len(message) <= 500
+
+
+def test_a_failure_that_is_not_grpc_is_one_capped_line_too():
+    producer = MagicMock()
+    with patch("worker.process_event", side_effect=RuntimeError("boom\n" + "x" * 2000)):
+        worker.handle_one({"submissionId": "s38"}, infra_cfg(), producer, wait=lambda s: None)
+    message = verdicts(producer)[0]["error_message"]
+    assert message.startswith("boom x") and "\n" not in message and len(message) == 500
 
 
 def test_the_retry_budget_ends_in_a_system_error():
@@ -444,14 +475,65 @@ def test_the_retry_budget_ends_in_a_system_error():
     assert sent[0]["error_message"] == "Judge infrastructure unavailable"
 
 
+def _unavailable_until_the_budget_ends(details, submission_id):
+    """handle_one with every sandbox UNAVAILABLE(details), a 10 s retry budget and a fake clock that only wait() moves:
+    (the waits, the retries counted, the verdicts sent)."""
+    producer, waits, clock, before = MagicMock(), [], [1000.0], infra_retries("sandbox")
+
+    def wait(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    with patch("worker.process_event", side_effect=rpc_error(UNAVAILABLE, details)), \
+            patch("worker.time.monotonic", side_effect=lambda: clock[0]):
+        worker.handle_one({"submissionId": submission_id}, infra_cfg(10), producer, wait=wait)
+    return waits, infra_retries("sandbox") - before, verdicts(producer)
+
+
+@pytest.mark.parametrize("details", [
+    "failed to connect to all addresses",
+    "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:10.0.0.2:8080: Socket closed",
+    "Handshake read failed",       # a connection cut mid-handshake by a restart: neither ssl nor a certificate
+])
+def test_every_sandbox_unavailable_gives_up_after_budget(details):
+    waits, retries, sent = _unavailable_until_the_budget_ends(details, "s39")
+    assert waits == [2, 4]                    # the next wait (8 s) would end past the 10 s budget
+    assert retries == 2
+    assert len(sent) == 1
+    assert sent[0]["status"] == verdict.SYSTEM_ERROR
+    assert sent[0]["error_message"] == infra_errors.GIVE_UP_MESSAGE
+
+
+@pytest.mark.parametrize("details", [
+    "failed to connect to all addresses; last error: UNKNOWN: ipv4:10.0.0.2:8080: Ssl handshake failed: "
+    "SSL_ERROR_SSL: error:1000007d:SSL routines:OPENSSL_internal:CERTIFICATE_VERIFY_FAILED",    # wrong CA
+    "failed to connect to all addresses; last error: UNKNOWN: ipv4:10.0.0.2:8080: "
+    "Peer name judge-server is not in peer certificate",                                      # wrong hostname
+])
+def test_an_unavailable_naming_a_tls_failure_ends_at_once_without_a_retry(details, caplog):
+    # A wrong CA or hostname does not heal by waiting: it must not consume the retry window.
+    waits, retries, sent = _unavailable_until_the_budget_ends(details, "s44")
+    assert waits == [] and retries == 0
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    message = sent[0]["error_message"]
+    # the submitter reads a fixed line (not the retry-budget message, nothing of the sandbox's address or TLS error)...
+    assert message == "UNAVAILABLE: the judge sandbox's TLS certificate check failed" == infra_errors.TLS_FAILURE_MESSAGE
+    assert message != infra_errors.GIVE_UP_MESSAGE and "\n" not in message
+    assert "ipv4" not in message and "10.0.0.2" not in message and "handshake" not in message
+    # ...while the log keeps the whole failure
+    failure = [r for r in caplog.records if r.name == "judge-worker" and r.levelname == "ERROR"]
+    assert len(failure) == 1 and failure[0].exc_info is not None
+    assert details in caplog.text
+
+
 def test_each_retry_announces_the_start_again():
     producer = MagicMock()
     calls = itertools.count()
 
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         if next(calls) < 2:
-            raise requests.ConnectionError("refused")
+            raise rpc_error(UNAVAILABLE, "refused")
         return {"submissionId": "s34", "status": 0}
 
     with patch("worker.process_event", side_effect=fake_process):
@@ -465,7 +547,7 @@ def test_run_commits_only_after_the_retried_verdict():
     producer, consumer = manager.producer, manager.consumer
     consumer.__iter__.return_value = [Msg({"submissionId": "s35"})]
     with patch("worker.process_event",
-               side_effect=[requests.ConnectionError("refused"), {"submissionId": "s35", "status": 0}]):
+               side_effect=[rpc_error(UNAVAILABLE, "refused"), {"submissionId": "s35", "status": 0}]):
         worker.run(infra_cfg(), consumer, producer)
     names = [c[0] for c in manager.mock_calls]
     assert names.index("consumer.pause") < names.index("consumer.poll") < names.index("producer.send") \
@@ -651,7 +733,7 @@ def test_after_sigterm_an_outage_of_the_sandbox_abandons_the_submission_uncommit
     producer, consumer = manager.producer, manager.consumer
     consumer.__iter__.return_value = [Msg({"submissionId": "s23"})]
     consumer.poll.side_effect = lambda **kw: (s.request(), {})[1]
-    with patch("worker.process_event", side_effect=requests.ConnectionError("refused")) as judge:
+    with patch("worker.process_event", side_effect=rpc_error(UNAVAILABLE, "refused")) as judge:
         worker.run(infra_cfg(), consumer, producer, shutdown=s)
     assert judge.call_count <= 2                  # not re-tried back to back until the grace period ends
     producer.send.assert_not_called()             # no made-up SYSTEM_ERROR for a submission that was never judged
@@ -726,3 +808,60 @@ def test_a_submission_verdict_has_no_reply_to():
     with patch("worker.process_event", return_value={"submissionId": "s53", "status": 0}):
         worker.handle_one({"submissionId": "s53"}, cfg, producer)
     assert "replyTo" not in producer.send.call_args.kwargs["value"]
+
+
+def test_progress_event_shape():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PROGRESS_TOPIC="submission.progress", WORKER_ID="w1",
+                    PUBLISH_TIMEOUT_SECONDS=10)
+    case = {"test_case": "2", "result": -1, "error": 0, "cpu_time": 21, "real_time": 25, "memory": 4096}
+
+    def fake_process(event, config, on_started=None, on_case=None):
+        on_case(case, 12)
+        return {"submissionId": "s21", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s21", "rejudgeCount": 2}, cfg, producer)
+
+    progress = [c for c in producer.send.call_args_list if c.args[0] == "submission.progress"]
+    assert len(progress) == 1
+    assert progress[0].kwargs["key"] == "s21"
+    assert progress[0].kwargs["value"] == {
+        "submissionId": "s21", "worker": "w1", "testCase": "2", "result": -1, "error": 0,
+        "cpuTime": 21, "realTime": 25, "memory": 4096, "total": 12, "rejudgeCount": 2}
+    # advisory: only the verdict's future is waited on
+    producer.send.return_value.get.assert_called_once_with(timeout=10)
+
+
+def test_a_failed_progress_publish_does_not_stop_judging():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PROGRESS_TOPIC="submission.progress", WORKER_ID="w1",
+                    PUBLISH_TIMEOUT_SECONDS=10)
+    verdict_future = MagicMock()
+    producer.send.side_effect = [KafkaTimeoutError(), verdict_future]
+    case = {"test_case": "1", "result": 0, "error": 0, "cpu_time": 1, "real_time": 1, "memory": 1}
+
+    def fake_process(event, config, on_started=None, on_case=None):
+        on_case(case, None)
+        return {"submissionId": "s22", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s22"}, cfg, producer)
+
+    assert producer.send.call_args_list[-1].args[0] == "submission.judged"
+    verdict_future.get.assert_called_once_with(timeout=10)
+
+
+def test_a_run_hands_no_progress_listener_to_the_judging():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="run.judged", PROGRESS_TOPIC="submission.progress", PUBLISH_TIMEOUT_SECONDS=10)
+    handed = []
+
+    def fake_process(event, config, on_started=None, on_case=None):
+        handed.append(on_case)
+        return {"runId": "r1", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"runId": "r1", "test_case": []}, cfg, producer)
+
+    assert handed == [None]

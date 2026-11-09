@@ -24,8 +24,9 @@ def _safe_extract_zip(zip_path, dest_dir):
         zf.extractall(dest_dir)
 
 
-# qduoj's checker user spj (uid 12003) has primary group 12003; a submission runs as code (uid 12002), which is not in
-# that group. The worker joins it (compose group_add), so it may give its own files to the group.
+# The sandbox's checker user spj (uid 12003) has primary group 12003, and the checker runs with the slot's group; a
+# submission runs as a per-slot user (uids 12100-12107), which is not in group 12003. The worker joins group 12003
+# (compose group_add), so it may give its own files to the group.
 SPJ_GID = 12003
 
 
@@ -36,7 +37,7 @@ def _is_checker_bundle(bundle_dir):
 
 
 def _share_inputs_with_the_checker(bundle_dir):
-    """Let qduoj's checker read the inputs and nothing else, whatever the umask. The checker runs as spj and opens
+    """Let the sandbox's checker read the inputs and nothing else, whatever the umask. The checker runs as spj and opens
     argv[1] = <bundle_dir>/<n>.in itself, so the directory and each *.in go to group spj (0750, 0640). The expected
     outputs and info stay the owner's (0600): root reads them in the sandbox, through DAC_OVERRIDE, and a submission
     (code, not in group spj) reads none of the bundle. Bundles are flat files."""

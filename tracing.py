@@ -34,7 +34,7 @@ def init_tracing(service_name=None):
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
-    RequestsInstrumentor().instrument()  # child spans for the HTTP calls to judge-server
+    RequestsInstrumentor().instrument()  # child spans for the requests calls (the heartbeat relay); gRPC is not traced
     return True
 
 
