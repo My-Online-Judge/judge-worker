@@ -24,4 +24,5 @@ def test_stubs_expose_the_judge_server_contract():
 
     assert pb.DESCRIPTOR.package == "oj.judge.v1"
     assert hasattr(pb_grpc, "JudgeServerStub") and hasattr(pb_grpc, "JudgeServerServicer")
-    assert {m for m in ("Judge", "Ping") if hasattr(pb_grpc.JudgeServerServicer, m)} == {"Judge", "Ping"}
+    methods = ("Judge", "JudgeStream", "Ping")
+    assert {m for m in methods if hasattr(pb_grpc.JudgeServerServicer, m)} == set(methods)

@@ -280,3 +280,58 @@ def test_process_event_adds_the_checker_allowance_to_the_scaled_deadline(monkeyp
     with patch("handler.maybe_sweep"), patch("handler.dispatch_judge", return_value={"err": None, "data": []}) as m:
         handler.process_event(event, _Cfg)
     assert m.call_args.kwargs["timeout"] == 110
+
+
+def test_a_submission_reports_each_case_with_the_bundles_case_count(monkeypatch, tmp_path):
+    (tmp_path / "info").write_text('{"test_case_number": 3}')
+    monkeypatch.setattr(handler, "maybe_sweep", lambda: None)
+    monkeypatch.setattr(handler, "ensure_present", lambda tcid: str(tmp_path))
+    case = {"test_case": "2", "result": 0, "error": 0, "cpu_time": 1, "real_time": 1, "memory": 1}
+
+    def fake_dispatch(urls, token, request, timeout, on_case=None):
+        on_case(case)
+        return {"err": None, "data": [case] * 3}
+
+    monkeypatch.setattr(handler, "dispatch_judge", fake_dispatch)
+    heard = []
+    event = {"submissionId": "sub-9", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
+             "test_case_id": "p", "output": True}
+
+    out = handler.process_event(event, _Cfg, on_case=lambda c, total: heard.append((c, total)))
+
+    assert heard == [(case, 3)]
+    assert out["status"] == verdict.ACCEPTED
+
+
+def test_a_run_reports_no_cases(monkeypatch):
+    handed = []
+
+    def fake_dispatch(urls, token, request, timeout, on_case=None):
+        handed.append(on_case)
+        return {"err": None, "data": [{"error": 0, "result": 0, "cpu_time": 1, "real_time": 1, "memory": 1}]}
+
+    monkeypatch.setattr(handler, "dispatch_judge", fake_dispatch)
+    event = {"runId": "r1", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
+             "test_case": [{"input": "1", "output": "1"}], "output": True}
+
+    handler.process_event(event, _Cfg, on_case=lambda c, total: pytest.fail("a run reported a case"))
+
+    assert handed == [None]
+
+
+def test_without_a_listener_no_case_is_reported(monkeypatch):
+    handed = []
+
+    def fake_dispatch(urls, token, request, timeout, on_case=None):
+        handed.append(on_case)
+        return {"err": None, "data": []}
+
+    monkeypatch.setattr(handler, "dispatch_judge", fake_dispatch)
+    monkeypatch.setattr(handler, "maybe_sweep", lambda: None)
+    monkeypatch.setattr(handler, "ensure_present", lambda tcid: "/nowhere")
+    event = {"submissionId": "s", "src": "x", "language_config": {}, "max_cpu_time": 1000, "max_memory": 1,
+             "test_case_id": "p", "output": True}
+
+    handler.process_event(event, _Cfg)
+
+    assert handed == [None]

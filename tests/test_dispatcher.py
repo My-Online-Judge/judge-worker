@@ -376,7 +376,7 @@ def test_dispatch_uses_first_url_on_success(mock_call):
     out = dispatcher.dispatch_judge([A, B], "t", REQUEST, timeout=5)
     assert out == OK
     # The sandbox's address, not its URL: the call is made over gRPC.
-    assert mock_call.call_args_list == [call(ADDR_A, "t", REQUEST, timeout=5)]
+    assert mock_call.call_args_list == [call(ADDR_A, "t", REQUEST, timeout=5, on_case=None)]
 
 
 @patch("dispatcher.call_judge_server")

@@ -278,7 +278,7 @@ def test_started_event_shape():
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
                     PUBLISH_TIMEOUT_SECONDS=10)
 
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         return {"submissionId": "s20", "status": 0}
 
@@ -308,7 +308,7 @@ def test_a_failed_start_publish_does_not_stop_judging():
     cfg = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
                     PUBLISH_TIMEOUT_SECONDS=10)
 
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         return {"submissionId": "s21", "status": 0}
 
@@ -331,7 +331,7 @@ def sent_on(producer, topic):
 
 
 def judged_after_start(submission_id):
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         return {"submissionId": submission_id, "status": 0}
     return fake_process
@@ -515,7 +515,7 @@ def test_each_retry_announces_the_start_again():
     producer = MagicMock()
     calls = itertools.count()
 
-    def fake_process(event, config, on_started=None):
+    def fake_process(event, config, on_started=None, on_case=None):
         on_started()
         if next(calls) < 2:
             raise rpc_error(UNAVAILABLE, "refused")
@@ -793,3 +793,60 @@ def test_a_submission_verdict_has_no_reply_to():
     with patch("worker.process_event", return_value={"submissionId": "s53", "status": 0}):
         worker.handle_one({"submissionId": "s53"}, cfg, producer)
     assert "replyTo" not in producer.send.call_args.kwargs["value"]
+
+
+def test_progress_event_shape():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PROGRESS_TOPIC="submission.progress", WORKER_ID="w1",
+                    PUBLISH_TIMEOUT_SECONDS=10)
+    case = {"test_case": "2", "result": -1, "error": 0, "cpu_time": 21, "real_time": 25, "memory": 4096}
+
+    def fake_process(event, config, on_started=None, on_case=None):
+        on_case(case, 12)
+        return {"submissionId": "s21", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s21", "rejudgeCount": 2}, cfg, producer)
+
+    progress = [c for c in producer.send.call_args_list if c.args[0] == "submission.progress"]
+    assert len(progress) == 1
+    assert progress[0].kwargs["key"] == "s21"
+    assert progress[0].kwargs["value"] == {
+        "submissionId": "s21", "worker": "w1", "testCase": "2", "result": -1, "error": 0,
+        "cpuTime": 21, "realTime": 25, "memory": 4096, "total": 12, "rejudgeCount": 2}
+    # advisory: only the verdict's future is waited on
+    producer.send.return_value.get.assert_called_once_with(timeout=10)
+
+
+def test_a_failed_progress_publish_does_not_stop_judging():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="submission.judged", PROGRESS_TOPIC="submission.progress", WORKER_ID="w1",
+                    PUBLISH_TIMEOUT_SECONDS=10)
+    verdict_future = MagicMock()
+    producer.send.side_effect = [KafkaTimeoutError(), verdict_future]
+    case = {"test_case": "1", "result": 0, "error": 0, "cpu_time": 1, "real_time": 1, "memory": 1}
+
+    def fake_process(event, config, on_started=None, on_case=None):
+        on_case(case, None)
+        return {"submissionId": "s22", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"submissionId": "s22"}, cfg, producer)
+
+    assert producer.send.call_args_list[-1].args[0] == "submission.judged"
+    verdict_future.get.assert_called_once_with(timeout=10)
+
+
+def test_a_run_hands_no_progress_listener_to_the_judging():
+    producer = MagicMock()
+    cfg = MagicMock(JUDGED_TOPIC="run.judged", PROGRESS_TOPIC="submission.progress", PUBLISH_TIMEOUT_SECONDS=10)
+    handed = []
+
+    def fake_process(event, config, on_started=None, on_case=None):
+        handed.append(on_case)
+        return {"runId": "r1", "status": 0}
+
+    with patch("worker.process_event", side_effect=fake_process):
+        worker.handle_one({"runId": "r1", "test_case": []}, cfg, producer)
+
+    assert handed == [None]

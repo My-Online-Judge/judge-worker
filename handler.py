@@ -106,7 +106,11 @@ def judge_deadline_seconds(config, max_cpu_time_ms, case_count, has_spj):
     return min(config.JUDGE_TIMEOUT_SECONDS + cases_seconds + spj_seconds, config.JUDGE_TIMEOUT_MAX_SECONDS)
 
 
-def process_event(event, config, on_started=None):
+def process_event(event, config, on_started=None, on_case=None):
+    """Judge one record and build its judged event. on_started is called once the bundle is in place, just before the
+    dispatch (a submission only). on_case(case, total), when given, is called for each case as a sandbox judges it (a
+    submission only: a run has nobody watching a ladder), with the bundle's case count, or None when the bundle's info
+    could not be read."""
     key, job_id = job_identity(event) or ("submissionId", "-")
     token = submission_id_var.set(job_id)
     try:
@@ -124,8 +128,9 @@ def process_event(event, config, on_started=None):
         # The sandbox may first have to compile a checker (Config.SPJ_COMPILE_ALLOWANCE_SECONDS) and then judges every
         # case of the bundle: the deadline grows with both, up to Config.JUDGE_TIMEOUT_MAX_SECONDS.
         timeout = judge_deadline_seconds(config, event["max_cpu_time"], expected_count, request.HasField("spj"))
+        report = None if inline or on_case is None else (lambda case: on_case(case, expected_count))
         judge_response = dispatch_judge(
-            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, request, timeout=timeout,
+            config.JUDGE_SERVER_URLS, config.JUDGE_SERVER_TOKEN, request, timeout=timeout, on_case=report,
         )
         return build_judged_event(job_id, judge_response, id_key=key, expected_count=expected_count)
     finally:

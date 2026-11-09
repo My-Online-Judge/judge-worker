@@ -18,11 +18,15 @@ CODE = grpc.StatusCode
 
 
 class _Sandbox(pb_grpc.JudgeServerServicer):
-    """Answers Judge with `reply`, or aborts the call with `abort` = (status code, details); `delay` seconds first."""
+    """Answers Judge with `reply`, or aborts the call with `abort` = (status code, details); `delay` seconds first.
+    JudgeStream sends `reply`'s cases one by one (without their output), then `reply` as done; `abort_after` cases it
+    aborts instead, and `no_done` ends the stream after the cases."""
 
-    def __init__(self, reply=None, abort=None, delay=0.0):
+    def __init__(self, reply=None, abort=None, delay=0.0, abort_after=None, no_done=False):
         self.reply, self.abort, self.delay = reply, abort, delay
+        self.abort_after, self.no_done = abort_after, no_done
         self.calls = []
+        self.stream_calls = []
 
     def Judge(self, request, context):
         self.calls.append((request, dict(context.invocation_metadata())))
@@ -30,6 +34,26 @@ class _Sandbox(pb_grpc.JudgeServerServicer):
         if self.abort:
             context.abort(*self.abort)
         return self.reply
+
+    def JudgeStream(self, request, context):
+        self.stream_calls.append((request, dict(context.invocation_metadata())))
+        time.sleep(self.delay)
+        if self.abort:
+            context.abort(*self.abort)
+        for i, case in enumerate(self.reply.results.cases):
+            if self.abort_after is not None and i == self.abort_after:
+                context.abort(CODE.UNAVAILABLE, "sandbox died mid-judgement")
+            event = pb.CaseResult()
+            event.CopyFrom(case)
+            event.ClearField("output")
+            yield pb.JudgeEvent(case=event)
+        if not self.no_done:
+            yield pb.JudgeEvent(done=self.reply)
+
+
+class _UnaryOnlySandbox(_Sandbox):
+    """A sandbox from before JudgeStream existed: the base servicer answers the stream with UNIMPLEMENTED."""
+    JudgeStream = pb_grpc.JudgeServerServicer.JudgeStream
 
 
 def _refused_url():
@@ -41,6 +65,12 @@ def _refused_url():
 
 def _accepted(output=b"3\n"):
     return pb.JudgeResponse(results=pb.CaseResults(cases=[pb.CaseResult(test_case="1", result=0, output=output)]))
+
+
+def _two_cases():
+    return pb.JudgeResponse(results=pb.CaseResults(cases=[
+        pb.CaseResult(test_case="1", result=0, cpu_time_ms=12, real_time_ms=15, memory_bytes=4096, output=b"1\n"),
+        pb.CaseResult(test_case="2", result=-1, cpu_time_ms=21, output=b"22\n")]))
 
 
 def test_a_call_carries_the_token_over_the_wire_and_returns_the_verdict_dict(serve):
@@ -139,3 +169,83 @@ def test_a_real_unavailable_naming_the_tls_handshake_is_waited_out(serve):
 
     assert infra_errors.transient_reason(caught.value) == "sandbox"
     assert infra_errors.describe(caught.value) == "UNAVAILABLE: Ssl handshake failed: certificate verify failed"
+
+
+# --- JudgeStream: the cases as they are judged, then the verdict ---
+
+def test_with_on_case_the_stream_reports_each_case_without_output_and_returns_the_verdict(serve):
+    sandbox = _Sandbox(reply=_two_cases())
+    url = serve(sandbox)
+    seen = []
+
+    out = dispatcher.dispatch_judge([url], "secret", pb.JudgeRequest(src="x"), timeout=5, on_case=seen.append)
+
+    assert seen == [
+        {"test_case": "1", "result": 0, "error": 0, "cpu_time": 12, "real_time": 15, "memory": 4096},
+        {"test_case": "2", "result": -1, "error": 0, "cpu_time": 21, "real_time": 0, "memory": 0}]
+    assert out["err"] is None and [c["output"] for c in out["data"]] == ["1\n", "22\n"]
+    assert sandbox.calls == []                       # the stream, not the unary call
+    _, metadata = sandbox.stream_calls[0]
+    assert metadata["x-judge-server-token"] == hashlib.sha256(b"secret").hexdigest()
+
+
+def test_without_on_case_the_unary_judge_is_used(serve):
+    sandbox = _Sandbox(reply=_two_cases())
+    url = serve(sandbox)
+
+    out = dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5)
+
+    assert len(out["data"]) == 2 and sandbox.stream_calls == [] and len(sandbox.calls) == 1
+
+
+def test_a_sandbox_without_judge_stream_is_asked_again_with_judge(serve):
+    sandbox = _UnaryOnlySandbox(reply=_two_cases())
+    url = serve(sandbox)
+    seen = []
+
+    out = dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5, on_case=seen.append)
+
+    assert seen == [] and len(out["data"]) == 2
+    assert len(sandbox.calls) == 1                   # the fallback went to the same sandbox
+    assert sandbox_health.order([url]) == [url]
+
+
+def test_a_stream_that_dies_mid_judgement_fails_over_and_only_the_next_verdict_counts(serve):
+    dispatcher.reset_round_robin()
+    dying, live = _Sandbox(reply=_two_cases(), abort_after=1), _Sandbox(reply=_two_cases())
+    first, second = serve(dying), serve(live)
+    seen = []
+
+    out = dispatcher.dispatch_judge([first, second], "t", pb.JudgeRequest(), timeout=5, on_case=seen.append)
+
+    # the first sandbox reported case 1 before dying; the second reported both; the verdict is the second's
+    assert [c["test_case"] for c in seen] == ["1", "1", "2"]
+    assert len(out["data"]) == 2
+    assert sandbox_health.order([first, second]) == [second, first]
+
+
+def test_a_stream_that_ends_without_a_verdict_is_an_unexpected_response(serve):
+    url = serve(_Sandbox(reply=_two_cases(), no_done=True))
+    seen = []
+
+    out = dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5, on_case=seen.append)
+
+    assert len(seen) == 2
+    assert out["err"] == "UnexpectedResponse"
+
+
+def test_a_streamed_compile_error_is_still_a_compile_error(serve):
+    reply = pb.JudgeResponse(compile_error=pb.CompileError(message="expected ';'"))
+    url = serve(_Sandbox(reply=reply))
+    seen = []
+
+    out = dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5, on_case=seen.append)
+
+    assert seen == [] and out == {"err": "CompileError", "data": "expected ';'"}
+
+
+def test_a_stream_refused_with_invalid_argument_is_raised_at_once(serve):
+    url = serve(_Sandbox(reply=_two_cases(), abort=(CODE.INVALID_ARGUMENT, "unknown seccomp rule")))
+    with pytest.raises(grpc.RpcError) as caught:
+        dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5, on_case=lambda c: None)
+    assert (caught.value.code(), caught.value.details()) == (CODE.INVALID_ARGUMENT, "unknown seccomp rule")

@@ -127,6 +127,19 @@ def response_to_dict(resp):
     return {"err": "UnexpectedResponse", "data": "judge-server answered without an outcome"}
 
 
+def _case_event_to_dict(case):
+    """A JudgeStream `case` event as the dict handed to on_case: the case's verdict and measurements, in the names of
+    the judged event's details (verdict.py). No output travels on it; that comes once, in the verdict."""
+    return {
+        "test_case": case.test_case,
+        "result": case.result,
+        "error": case.error,
+        "cpu_time": case.cpu_time_ms,
+        "real_time": case.real_time_ms,
+        "memory": case.memory_bytes,
+    }
+
+
 def _channel(address):
     """The channel to `address`, opened on first use: over mutual TLS with the worker's certificate, or plaintext when
     OJ_TLS_DIR is not set (tls.grpc_channel_credentials). With TLS on and a certificate file missing this raises, and
@@ -151,12 +164,33 @@ def _stub(address):
     return pb_grpc.JudgeServerStub(_channel(address))
 
 
-def call_judge_server(address, token, request, timeout=30):
-    """JudgeServer.Judge on one sandbox, as the verdict dict. `timeout` is the call's deadline: when it passes the
+def call_judge_server(address, token, request, timeout=30, on_case=None):
+    """One sandbox's verdict, as the dict response_to_dict builds. `timeout` is the call's deadline: when it passes the
     sandbox kills the job and the call raises DEADLINE_EXCEEDED. Raises grpc.RpcError for every failure of the call
-    itself; a compile error or a wrong answer is a result, not an error."""
-    response = _stub(address).Judge(request, timeout=timeout, metadata=[(TOKEN_METADATA_KEY, token_header(token))])
-    return response_to_dict(response)
+    itself; a compile error or a wrong answer is a result, not an error.
+
+    Without on_case this is JudgeServer.Judge. With it, JudgeServer.JudgeStream: on_case(_case_event_to_dict(case)) is
+    called for each case as the sandbox judges it (finishing order), and the stream's final `done` is the verdict. A
+    sandbox that does not know JudgeStream yet (UNIMPLEMENTED) is asked again with Judge, so a new worker can roll out
+    before the sandboxes; the cases are then not reported. A stream that ends without `done` is an UnexpectedResponse
+    (handler maps it to SYSTEM_ERROR), like a unary answer with no outcome."""
+    stub = _stub(address)
+    metadata = [(TOKEN_METADATA_KEY, token_header(token))]
+    if on_case is None:
+        return response_to_dict(stub.Judge(request, timeout=timeout, metadata=metadata))
+    try:
+        for event in stub.JudgeStream(request, timeout=timeout, metadata=metadata):
+            kind = event.WhichOneof("event")
+            if kind == "case":
+                on_case(_case_event_to_dict(event.case))
+            elif kind == "done":
+                return response_to_dict(event.done)
+    except grpc.RpcError as exc:
+        if grpc_errors.code_of(exc) != grpc.StatusCode.UNIMPLEMENTED:
+            raise
+        log.info("judge-server %s has no JudgeStream yet; judging without per-case progress", address)
+        return response_to_dict(stub.Judge(request, timeout=timeout, metadata=metadata))
+    return {"err": "UnexpectedResponse", "data": "judge-server ended the stream without a verdict"}
 
 
 def _is_retryable(exc):
@@ -171,12 +205,14 @@ def _marks_down(exc):
     return grpc_errors.code_of(exc) in _DOWN_CODES
 
 
-def dispatch_judge(urls, token, request, timeout=30):
+def dispatch_judge(urls, token, request, timeout=30, on_case=None):
     """Send the JudgeRequest to one of `urls`: the healthy sandboxes first, each list in round-robin order, failing
     over to the next candidate on a retryable error (_is_retryable). A failure that says the sandbox is unwell marks it
     down and a success marks it up (sandbox_health). Raises the last error if every candidate fails, the error itself
     at once if it is not retryable, or ValueError if no URLs are configured or one is not a host:port
-    (parse_address)."""
+    (parse_address). on_case, when given, hears each case as a sandbox judges it (call_judge_server); the cases a
+    sandbox reported before it failed are not taken back, the next sandbox reports its own and the verdict that comes
+    back is the only complete answer."""
     if not urls:
         raise ValueError("no judge-server URLs configured")
     addresses = {url: parse_address(url) for url in urls}
@@ -186,7 +222,7 @@ def dispatch_judge(urls, token, request, timeout=30):
     for url in ordered:
         label = sandbox_health.sandbox_label(url)
         try:
-            result = call_judge_server(addresses[url], token, request, timeout=timeout)
+            result = call_judge_server(addresses[url], token, request, timeout=timeout, on_case=on_case)
         except grpc.RpcError as exc:
             DISPATCHES.labels(sandbox=label, outcome="failed").inc()
             if not _is_retryable(exc):

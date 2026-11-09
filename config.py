@@ -39,6 +39,9 @@ class Config:
     JUDGED_TOPIC = os.getenv("JUDGED_TOPIC", "submission.judged")
     # Announced just before each dispatch (sub-project 11): submission-service starts its judging-timeout clock then.
     STARTED_TOPIC = os.getenv("STARTED_TOPIC", "submission.started")
+    # One record per judged case while a submission is being judged (JudgeStream): submission-service forwards it to the
+    # portal's live test ladder. Advisory like STARTED_TOPIC: never awaited, never stored, no program output on it.
+    PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "submission.progress")
     # Who judged: the Kubernetes pod name (Downward API POD_NAME) when there is one, so a verdict, a log line and a start
     # event name the pod that produced them; else WORKER_ID, else the container's hostname (compose).
     WORKER_ID = os.getenv("POD_NAME") or os.getenv("WORKER_ID") or socket.gethostname()

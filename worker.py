@@ -131,7 +131,23 @@ def publish_started(producer, config, submission_id, generation=None):
         log.warning("Start of submission %s not announced (%r)", submission_id, exc)
 
 
-def judge_with_infra_retry(event, config, on_started, wait):
+def publish_progress(producer, config, submission_id, case, total, generation=None):
+    """Tell submission-service one more case of submission_id is judged: the case's name, verdict and measurements,
+    the bundle's case count (None when unknown) and the request's generation (generation_of) when it had one. The
+    portal fills its ladder from these; it counts the distinct case names, so a case reported twice (a failover) is
+    harmless. Advisory like publish_started: not awaited, and a KafkaError is only logged. No program output travels
+    here, only in the verdict."""
+    try:
+        producer.send(config.PROGRESS_TOPIC, key=submission_id,
+                      value={"submissionId": submission_id, "worker": config.WORKER_ID,
+                             "testCase": case["test_case"], "result": case["result"], "error": case["error"],
+                             "cpuTime": case["cpu_time"], "realTime": case["real_time"], "memory": case["memory"],
+                             "total": total, **(generation or {})})
+    except KafkaError as exc:
+        log.warning("Progress of submission %s not announced (%r)", submission_id, exc)
+
+
+def judge_with_infra_retry(event, config, on_started, wait, on_case=None):
     """process_event, started again while MinIO or every sandbox is away (infra_errors.transient_reason), after
     2 s, 4 s … 60 s, until JUDGE_INFRA_RETRY_SECONDS would be exceeded: then a SYSTEM_ERROR. wait is run()'s
     pause/poll/seek, so nothing is committed meanwhile and the group keeps the partition. Any other failure is a
@@ -141,7 +157,7 @@ def judge_with_infra_retry(event, config, on_started, wait):
     delays = infra_errors.infra_delays()
     while True:
         try:
-            return process_event(event, config, on_started=on_started)
+            return process_event(event, config, on_started=on_started, on_case=on_case)
         except Exception as exc:  # judge-server down / timeout / bad response
             reason = infra_errors.transient_reason(exc)
             if reason is None:
@@ -190,8 +206,11 @@ def handle_one(event, config, producer, headers=None, wait=time.sleep, now_ms=No
             kind=SpanKind.CONSUMER,
             attributes={"oj.submission_id" if id_key == "submissionId" else "oj.run_id": submission_id}) as span:
         generation = generation_of(event)
+        # A run has no ladder to fill: nothing is reported per case (process_event skips it for inline cases too).
+        on_case = None if id_key != "submissionId" else \
+            (lambda case, total: publish_progress(producer, config, submission_id, case, total, generation))
         judged = judge_with_infra_retry(
-            event, config, lambda: publish_started(producer, config, submission_id, generation), wait)
+            event, config, lambda: publish_started(producer, config, submission_id, generation), wait, on_case)
         # every verdict, a SYSTEM_ERROR included, names the request's generation and who asked
         judged = {**judged, **generation, **reply_to_of(event)}
         span.set_attribute("oj.verdict_status", judged.get("status"))

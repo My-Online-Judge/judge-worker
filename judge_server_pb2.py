@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12judge_server.proto\x12\x0boj.judge.v1\"\x8b\x02\n\x0cJudgeRequest\x12\x0b\n\x03src\x18\x01 \x01(\t\x12\x34\n\x0flanguage_config\x18\x02 \x01(\x0b\x32\x1b.oj.judge.v1.LanguageConfig\x12\x17\n\x0fmax_cpu_time_ms\x18\x03 \x01(\x05\x12\x18\n\x10max_memory_bytes\x18\x04 \x01(\x03\x12\x0e\n\x06output\x18\x05 \x01(\x08\x12\x16\n\x0ctest_case_id\x18\x06 \x01(\tH\x00\x12\x31\n\ttest_case\x18\x07 \x01(\x0b\x32\x1c.oj.judge.v1.InlineTestCasesH\x00\x12!\n\x03spj\x18\x08 \x01(\x0b\x32\x14.oj.judge.v1.CheckerB\x07\n\x05\x63\x61ses\"b\n\x0eLanguageConfig\x12+\n\x07\x63ompile\x18\x01 \x01(\x0b\x32\x1a.oj.judge.v1.CompileConfig\x12#\n\x03run\x18\x02 \x01(\x0b\x32\x16.oj.judge.v1.RunConfig\"\xa6\x01\n\rCompileConfig\x12\x10\n\x08src_name\x18\x01 \x01(\t\x12\x10\n\x08\x65xe_name\x18\x02 \x01(\t\x12\x17\n\x0fmax_cpu_time_ms\x18\x03 \x01(\x05\x12\x18\n\x10max_real_time_ms\x18\x04 \x01(\x05\x12\x18\n\x10max_memory_bytes\x18\x05 \x01(\x03\x12\x17\n\x0f\x63ompile_command\x18\x06 \x01(\t\x12\x0b\n\x03\x65nv\x18\x07 \x03(\t\"`\n\tRunConfig\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x14\n\x0cseccomp_rule\x18\x02 \x01(\t\x12\x0b\n\x03\x65nv\x18\x03 \x03(\t\x12\x1f\n\x17memory_limit_check_only\x18\x04 \x01(\x08\"=\n\x0fInlineTestCases\x12*\n\x05\x63\x61ses\x18\x01 \x03(\x0b\x32\x1b.oj.judge.v1.InlineTestCase\"/\n\x0eInlineTestCase\x12\r\n\x05input\x18\x01 \x01(\t\x12\x0e\n\x06output\x18\x02 \x01(\t\"\x8d\x01\n\x07\x43hecker\x12\x0f\n\x07version\x18\x01 \x01(\t\x12\x0b\n\x03src\x18\x02 \x01(\t\x12+\n\x07\x63ompile\x18\x03 \x01(\x0b\x32\x1a.oj.judge.v1.CompileConfig\x12\x10\n\x08\x65xe_name\x18\x04 \x01(\t\x12\x0f\n\x07\x63ommand\x18\x05 \x01(\t\x12\x14\n\x0cseccomp_rule\x18\x06 \x01(\t\"\xb3\x01\n\rJudgeResponse\x12+\n\x07results\x18\x01 \x01(\x0b\x32\x18.oj.judge.v1.CaseResultsH\x00\x12\x32\n\rcompile_error\x18\x02 \x01(\x0b\x32\x19.oj.judge.v1.CompileErrorH\x00\x12\x36\n\x11spj_compile_error\x18\x03 \x01(\x0b\x32\x19.oj.judge.v1.CompileErrorH\x00\x42\t\n\x07outcome\"5\n\x0b\x43\x61seResults\x12&\n\x05\x63\x61ses\x18\x01 \x03(\x0b\x32\x17.oj.judge.v1.CaseResult\"\xe0\x01\n\nCaseResult\x12\x11\n\ttest_case\x18\x01 \x01(\t\x12\x0e\n\x06result\x18\x02 \x01(\x05\x12\r\n\x05\x65rror\x18\x03 \x01(\x05\x12\x13\n\x0b\x63pu_time_ms\x18\x04 \x01(\x03\x12\x14\n\x0creal_time_ms\x18\x05 \x01(\x03\x12\x14\n\x0cmemory_bytes\x18\x06 \x01(\x03\x12\x0e\n\x06signal\x18\x07 \x01(\x05\x12\x11\n\texit_code\x18\x08 \x01(\x05\x12\x12\n\noutput_md5\x18\t \x01(\t\x12\x0e\n\x06output\x18\n \x01(\x0c\x12\x18\n\x10output_truncated\x18\x0b \x01(\x08\"\x1f\n\x0c\x43ompileError\x12\x0f\n\x07message\x18\x01 \x01(\t\"\r\n\x0bPingRequest\"\x8f\x01\n\x0cPingResponse\x12\x10\n\x08hostname\x18\x01 \x01(\t\x12\x16\n\x0ejudger_version\x18\x02 \x01(\t\x12\x10\n\x08\x63pu_core\x18\x03 \x01(\x05\x12\x0b\n\x03\x63pu\x18\x04 \x01(\x01\x12\x0e\n\x06memory\x18\x05 \x01(\x01\x12\x14\n\x0crunning_jobs\x18\x06 \x01(\x05\x12\x10\n\x08max_jobs\x18\x07 \x01(\x05\x32\x8a\x01\n\x0bJudgeServer\x12>\n\x05Judge\x12\x19.oj.judge.v1.JudgeRequest\x1a\x1a.oj.judge.v1.JudgeResponse\x12;\n\x04Ping\x12\x18.oj.judge.v1.PingRequest\x1a\x19.oj.judge.v1.PingResponseBo\n&vn.thanhtuanle.oj.common.grpc.judge.v1P\x01ZCgithub.com/My-Online-Judge/judge-server/internal/pb/judgev1;judgev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12judge_server.proto\x12\x0boj.judge.v1\"j\n\nJudgeEvent\x12\'\n\x04\x63\x61se\x18\x01 \x01(\x0b\x32\x17.oj.judge.v1.CaseResultH\x00\x12*\n\x04\x64one\x18\x02 \x01(\x0b\x32\x1a.oj.judge.v1.JudgeResponseH\x00\x42\x07\n\x05\x65vent\"\x8b\x02\n\x0cJudgeRequest\x12\x0b\n\x03src\x18\x01 \x01(\t\x12\x34\n\x0flanguage_config\x18\x02 \x01(\x0b\x32\x1b.oj.judge.v1.LanguageConfig\x12\x17\n\x0fmax_cpu_time_ms\x18\x03 \x01(\x05\x12\x18\n\x10max_memory_bytes\x18\x04 \x01(\x03\x12\x0e\n\x06output\x18\x05 \x01(\x08\x12\x16\n\x0ctest_case_id\x18\x06 \x01(\tH\x00\x12\x31\n\ttest_case\x18\x07 \x01(\x0b\x32\x1c.oj.judge.v1.InlineTestCasesH\x00\x12!\n\x03spj\x18\x08 \x01(\x0b\x32\x14.oj.judge.v1.CheckerB\x07\n\x05\x63\x61ses\"b\n\x0eLanguageConfig\x12+\n\x07\x63ompile\x18\x01 \x01(\x0b\x32\x1a.oj.judge.v1.CompileConfig\x12#\n\x03run\x18\x02 \x01(\x0b\x32\x16.oj.judge.v1.RunConfig\"\xa6\x01\n\rCompileConfig\x12\x10\n\x08src_name\x18\x01 \x01(\t\x12\x10\n\x08\x65xe_name\x18\x02 \x01(\t\x12\x17\n\x0fmax_cpu_time_ms\x18\x03 \x01(\x05\x12\x18\n\x10max_real_time_ms\x18\x04 \x01(\x05\x12\x18\n\x10max_memory_bytes\x18\x05 \x01(\x03\x12\x17\n\x0f\x63ompile_command\x18\x06 \x01(\t\x12\x0b\n\x03\x65nv\x18\x07 \x03(\t\"`\n\tRunConfig\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x14\n\x0cseccomp_rule\x18\x02 \x01(\t\x12\x0b\n\x03\x65nv\x18\x03 \x03(\t\x12\x1f\n\x17memory_limit_check_only\x18\x04 \x01(\x08\"=\n\x0fInlineTestCases\x12*\n\x05\x63\x61ses\x18\x01 \x03(\x0b\x32\x1b.oj.judge.v1.InlineTestCase\"/\n\x0eInlineTestCase\x12\r\n\x05input\x18\x01 \x01(\t\x12\x0e\n\x06output\x18\x02 \x01(\t\"\x8d\x01\n\x07\x43hecker\x12\x0f\n\x07version\x18\x01 \x01(\t\x12\x0b\n\x03src\x18\x02 \x01(\t\x12+\n\x07\x63ompile\x18\x03 \x01(\x0b\x32\x1a.oj.judge.v1.CompileConfig\x12\x10\n\x08\x65xe_name\x18\x04 \x01(\t\x12\x0f\n\x07\x63ommand\x18\x05 \x01(\t\x12\x14\n\x0cseccomp_rule\x18\x06 \x01(\t\"\xb3\x01\n\rJudgeResponse\x12+\n\x07results\x18\x01 \x01(\x0b\x32\x18.oj.judge.v1.CaseResultsH\x00\x12\x32\n\rcompile_error\x18\x02 \x01(\x0b\x32\x19.oj.judge.v1.CompileErrorH\x00\x12\x36\n\x11spj_compile_error\x18\x03 \x01(\x0b\x32\x19.oj.judge.v1.CompileErrorH\x00\x42\t\n\x07outcome\"5\n\x0b\x43\x61seResults\x12&\n\x05\x63\x61ses\x18\x01 \x03(\x0b\x32\x17.oj.judge.v1.CaseResult\"\xe0\x01\n\nCaseResult\x12\x11\n\ttest_case\x18\x01 \x01(\t\x12\x0e\n\x06result\x18\x02 \x01(\x05\x12\r\n\x05\x65rror\x18\x03 \x01(\x05\x12\x13\n\x0b\x63pu_time_ms\x18\x04 \x01(\x03\x12\x14\n\x0creal_time_ms\x18\x05 \x01(\x03\x12\x14\n\x0cmemory_bytes\x18\x06 \x01(\x03\x12\x0e\n\x06signal\x18\x07 \x01(\x05\x12\x11\n\texit_code\x18\x08 \x01(\x05\x12\x12\n\noutput_md5\x18\t \x01(\t\x12\x0e\n\x06output\x18\n \x01(\x0c\x12\x18\n\x10output_truncated\x18\x0b \x01(\x08\"\x1f\n\x0c\x43ompileError\x12\x0f\n\x07message\x18\x01 \x01(\t\"\r\n\x0bPingRequest\"\x8f\x01\n\x0cPingResponse\x12\x10\n\x08hostname\x18\x01 \x01(\t\x12\x16\n\x0ejudger_version\x18\x02 \x01(\t\x12\x10\n\x08\x63pu_core\x18\x03 \x01(\x05\x12\x0b\n\x03\x63pu\x18\x04 \x01(\x01\x12\x0e\n\x06memory\x18\x05 \x01(\x01\x12\x14\n\x0crunning_jobs\x18\x06 \x01(\x05\x12\x10\n\x08max_jobs\x18\x07 \x01(\x05\x32\xcf\x01\n\x0bJudgeServer\x12>\n\x05Judge\x12\x19.oj.judge.v1.JudgeRequest\x1a\x1a.oj.judge.v1.JudgeResponse\x12\x43\n\x0bJudgeStream\x12\x19.oj.judge.v1.JudgeRequest\x1a\x17.oj.judge.v1.JudgeEvent0\x01\x12;\n\x04Ping\x12\x18.oj.judge.v1.PingRequest\x1a\x19.oj.judge.v1.PingResponseBo\n&vn.thanhtuanle.oj.common.grpc.judge.v1P\x01ZCgithub.com/My-Online-Judge/judge-server/internal/pb/judgev1;judgev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,32 +32,34 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'judge_server_pb2', _globals
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n&vn.thanhtuanle.oj.common.grpc.judge.v1P\001ZCgithub.com/My-Online-Judge/judge-server/internal/pb/judgev1;judgev1'
-  _globals['_JUDGEREQUEST']._serialized_start=36
-  _globals['_JUDGEREQUEST']._serialized_end=303
-  _globals['_LANGUAGECONFIG']._serialized_start=305
-  _globals['_LANGUAGECONFIG']._serialized_end=403
-  _globals['_COMPILECONFIG']._serialized_start=406
-  _globals['_COMPILECONFIG']._serialized_end=572
-  _globals['_RUNCONFIG']._serialized_start=574
-  _globals['_RUNCONFIG']._serialized_end=670
-  _globals['_INLINETESTCASES']._serialized_start=672
-  _globals['_INLINETESTCASES']._serialized_end=733
-  _globals['_INLINETESTCASE']._serialized_start=735
-  _globals['_INLINETESTCASE']._serialized_end=782
-  _globals['_CHECKER']._serialized_start=785
-  _globals['_CHECKER']._serialized_end=926
-  _globals['_JUDGERESPONSE']._serialized_start=929
-  _globals['_JUDGERESPONSE']._serialized_end=1108
-  _globals['_CASERESULTS']._serialized_start=1110
-  _globals['_CASERESULTS']._serialized_end=1163
-  _globals['_CASERESULT']._serialized_start=1166
-  _globals['_CASERESULT']._serialized_end=1390
-  _globals['_COMPILEERROR']._serialized_start=1392
-  _globals['_COMPILEERROR']._serialized_end=1423
-  _globals['_PINGREQUEST']._serialized_start=1425
-  _globals['_PINGREQUEST']._serialized_end=1438
-  _globals['_PINGRESPONSE']._serialized_start=1441
-  _globals['_PINGRESPONSE']._serialized_end=1584
-  _globals['_JUDGESERVER']._serialized_start=1587
-  _globals['_JUDGESERVER']._serialized_end=1725
+  _globals['_JUDGEEVENT']._serialized_start=35
+  _globals['_JUDGEEVENT']._serialized_end=141
+  _globals['_JUDGEREQUEST']._serialized_start=144
+  _globals['_JUDGEREQUEST']._serialized_end=411
+  _globals['_LANGUAGECONFIG']._serialized_start=413
+  _globals['_LANGUAGECONFIG']._serialized_end=511
+  _globals['_COMPILECONFIG']._serialized_start=514
+  _globals['_COMPILECONFIG']._serialized_end=680
+  _globals['_RUNCONFIG']._serialized_start=682
+  _globals['_RUNCONFIG']._serialized_end=778
+  _globals['_INLINETESTCASES']._serialized_start=780
+  _globals['_INLINETESTCASES']._serialized_end=841
+  _globals['_INLINETESTCASE']._serialized_start=843
+  _globals['_INLINETESTCASE']._serialized_end=890
+  _globals['_CHECKER']._serialized_start=893
+  _globals['_CHECKER']._serialized_end=1034
+  _globals['_JUDGERESPONSE']._serialized_start=1037
+  _globals['_JUDGERESPONSE']._serialized_end=1216
+  _globals['_CASERESULTS']._serialized_start=1218
+  _globals['_CASERESULTS']._serialized_end=1271
+  _globals['_CASERESULT']._serialized_start=1274
+  _globals['_CASERESULT']._serialized_end=1498
+  _globals['_COMPILEERROR']._serialized_start=1500
+  _globals['_COMPILEERROR']._serialized_end=1531
+  _globals['_PINGREQUEST']._serialized_start=1533
+  _globals['_PINGREQUEST']._serialized_end=1546
+  _globals['_PINGRESPONSE']._serialized_start=1549
+  _globals['_PINGRESPONSE']._serialized_end=1692
+  _globals['_JUDGESERVER']._serialized_start=1695
+  _globals['_JUDGESERVER']._serialized_end=1902
 # @@protoc_insertion_point(module_scope)

@@ -39,6 +39,11 @@ class JudgeServerStub(object):
                 request_serializer=judge__server__pb2.JudgeRequest.SerializeToString,
                 response_deserializer=judge__server__pb2.JudgeResponse.FromString,
                 _registered_method=True)
+        self.JudgeStream = channel.unary_stream(
+                '/oj.judge.v1.JudgeServer/JudgeStream',
+                request_serializer=judge__server__pb2.JudgeRequest.SerializeToString,
+                response_deserializer=judge__server__pb2.JudgeEvent.FromString,
+                _registered_method=True)
         self.Ping = channel.unary_unary(
                 '/oj.judge.v1.JudgeServer/Ping',
                 request_serializer=judge__server__pb2.PingRequest.SerializeToString,
@@ -68,6 +73,18 @@ class JudgeServerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def JudgeStream(self, request, context):
+        """Judge, streamed: the same request, the same checks and the same status codes, but each case's result is sent as it
+        is judged (JudgeEvent.case, in finishing order, not bundle order), then exactly one JudgeEvent.done carrying the
+        whole JudgeResponse the unary call would have returned (its cases in bundle order). A compile error sends only
+        `done`. A call that fails sends no `done`: the stream ends with the status code instead, and the client must not
+        use the cases it has seen (the next sandbox judges from scratch). Added 2026-11-08 so the portal can show the test
+        ladder fill live; `Judge` stays for callers that do not need it (the run lane).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Ping(self, request, context):
         """Health and load probe for the worker's sandbox registry.
         """
@@ -82,6 +99,11 @@ def add_JudgeServerServicer_to_server(servicer, server):
                     servicer.Judge,
                     request_deserializer=judge__server__pb2.JudgeRequest.FromString,
                     response_serializer=judge__server__pb2.JudgeResponse.SerializeToString,
+            ),
+            'JudgeStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.JudgeStream,
+                    request_deserializer=judge__server__pb2.JudgeRequest.FromString,
+                    response_serializer=judge__server__pb2.JudgeEvent.SerializeToString,
             ),
             'Ping': grpc.unary_unary_rpc_method_handler(
                     servicer.Ping,
@@ -116,6 +138,33 @@ class JudgeServer(object):
             '/oj.judge.v1.JudgeServer/Judge',
             judge__server__pb2.JudgeRequest.SerializeToString,
             judge__server__pb2.JudgeResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def JudgeStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/oj.judge.v1.JudgeServer/JudgeStream',
+            judge__server__pb2.JudgeRequest.SerializeToString,
+            judge__server__pb2.JudgeEvent.FromString,
             options,
             channel_credentials,
             insecure,

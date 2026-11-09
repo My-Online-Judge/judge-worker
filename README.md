@@ -1,7 +1,9 @@
 # judge-worker
 
 Kafka consumer bọc quanh `judge-server` (sandbox viết bằng Go) qua gRPC. Consume `submission.requested`,
-gọi `JudgeServer.Judge` của judge-server, resolve verdict, publish `submission.judged`.
+gọi `JudgeServer.JudgeStream` của judge-server (mỗi case chấm xong là một event, cuối cùng là verdict), resolve
+verdict, publish `submission.judged`; từng case chấm xong được báo lên `submission.progress` để portal tô dần bảng test.
+Sandbox chưa có `JudgeStream` (UNIMPLEMENTED) thì worker gọi lại `Judge` như cũ, không báo tiến độ.
 
 ## Run tests
     python -m venv .venv && . .venv/bin/activate
@@ -36,6 +38,10 @@ gọi `JudgeServer.Judge` của judge-server, resolve verdict, publish `submissi
   tăng giá trị này hoặc hạ JUDGE_TIMEOUT_MAX_SECONDS. Các lần chờ Kafka, MinIO hay sandbox mất kết nối đều `poll()` mỗi 1 s
   nên không tính vào đây
 - STARTED_TOPIC (default submission.started) — worker báo bắt đầu chấm trước mỗi lần dispatch; WORKER_ID (default hostname)
+- PROGRESS_TOPIC (default submission.progress) — mỗi case chấm xong một record (key = submissionId): `testCase`, `result`,
+  `error`, `cpuTime`, `realTime`, `memory`, `total` (số case của bundle, null nếu không đọc được), `rejudgeCount` nếu
+  request có. Không có output của bài; chỉ báo, không chờ ack, lỗi Kafka chỉ ghi log. Khi failover sang sandbox khác,
+  case đã báo không bị rút lại: portal đếm theo tên case, verdict cuối mới là câu trả lời đầy đủ
 - JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
   quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Với sandbox,
   chỉ mã gRPC UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED được chờ; UNAVAILABLE luôn được chờ, kể cả khi chi tiết nhắc TLS
@@ -52,7 +58,8 @@ gọi `JudgeServer.Judge` của judge-server, resolve verdict, publish `submissi
 
 ## Làn Run (Run code design §8)
 Một record có `runId` + `test_case` (không có `test_case_id`) là một *run*: worker không đồng bộ bundle, không báo
-`submission.started`, gửi `test_case` thẳng cho sandbox và trả verdict lên `JUDGED_TOPIC` dưới `runId` (cùng envelope với
+`submission.started` hay `submission.progress` (gọi `Judge` thường, không stream), gửi `test_case` thẳng cho sandbox và
+trả verdict lên `JUDGED_TOPIC` dưới `runId` (cùng envelope với
 `submission.judged`). Run có `expiresAt` (epoch ms) đã qua thì bị bỏ qua và đếm ở `oj_run_expired_total` — sau một
 đợt làn Run gián đoạn, hàng đợi cũ được dọn ngay thay vì chấm cho không ai. Compose chạy service `run-worker` từ chính
 image này với `REQUESTED_TOPIC=run.requested JUDGED_TOPIC=run.judged CONSUMER_GROUP=run-workers OTEL_SERVICE_NAME=run-worker`
