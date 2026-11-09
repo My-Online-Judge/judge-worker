@@ -45,10 +45,15 @@ Sandbox chưa có `JudgeStream` (UNIMPLEMENTED) thì worker gọi lại `Judge` 
   case đã báo không bị rút lại: portal đếm theo tên case, verdict cuối mới là câu trả lời đầy đủ
 - JUDGE_INFRA_RETRY_SECONDS (default 300) — MinIO hoặc mọi sandbox mất kết nối thì chấm lại sau 2 s, 4 s … tối đa 60 s,
   quá ngân sách này thì SYSTEM_ERROR `Judge infrastructure unavailable`; đếm ở oj_judge_infra_retries_total{reason}. Với sandbox,
-  chỉ mã gRPC UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED được chờ; UNAVAILABLE luôn được chờ, kể cả khi chi tiết nhắc TLS
-  (sandbox khởi động lại giữa lúc bắt tay TLS trông giống chứng chỉ sai). Không retry khi DEADLINE_EXCEEDED (sandbox có thể đang
-  chấm) hay mã khác (INVALID_ARGUMENT, …). Với MinIO, lỗi chứng chỉ TLS (urllib3 SSLError) là vĩnh viễn: không retry (cấu hình
-  sai, không tự khỏi). Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết` (tối đa 500 ký tự)
+  chỉ mã gRPC UNAVAILABLE, INTERNAL, RESOURCE_EXHAUSTED được chờ, trừ UNAVAILABLE mà chi tiết (`details`) nhắc `ssl` hoặc
+  `certificate` (không phân biệt hoa thường): đó là cấu hình TLS sai vĩnh viễn (CA hoặc hostname sai, không tự khỏi), gRPC lại
+  báo bằng UNAVAILABLE như sandbox đang tắt, nên không retry: SYSTEM_ERROR ngay thay vì chờ hết ngân sách. UNAVAILABLE khác
+  (từ chối kết nối, socket đóng, bị reset, lỗi DNS) và INTERNAL, RESOURCE_EXHAUSTED vẫn được chờ như cũ; `handshake` không phải
+  dấu hiệu (sandbox khởi động lại cắt giữa chừng trông giống lỗi bắt tay). Giới hạn: với TLS 1.3, chứng chỉ client bị sandbox từ
+  chối chỉ hiện là `Socket closed` sau bắt tay, giống sandbox đang khởi động lại, nên vẫn được chờ. Không retry khi
+  DEADLINE_EXCEEDED (sandbox có thể đang chấm) hay mã khác (INVALID_ARGUMENT, …). Với MinIO, lỗi chứng chỉ TLS (urllib3
+  SSLError) cũng vĩnh viễn: không retry. Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết`
+  (tối đa 500 ký tự)
 - METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total, oj_run_expired_total
 - SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker gọi gRPC `Ping` của
   từng sandbox rồi chuyển câu trả lời (hostname, judger_version, cpu_core, cpu, memory, running_jobs, max_jobs) về registry

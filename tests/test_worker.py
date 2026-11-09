@@ -490,8 +490,13 @@ def _unavailable_until_the_budget_ends(details, submission_id):
     return waits, infra_retries("sandbox") - before, verdicts(producer)
 
 
-def test_every_sandbox_unavailable_gives_up_after_budget():
-    waits, retries, sent = _unavailable_until_the_budget_ends("failed to connect to all addresses", "s39")
+@pytest.mark.parametrize("details", [
+    "failed to connect to all addresses",
+    "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:10.0.0.2:8080: Socket closed",
+    "Handshake read failed",       # a connection cut mid-handshake by a restart: neither ssl nor a certificate
+])
+def test_every_sandbox_unavailable_gives_up_after_budget(details):
+    waits, retries, sent = _unavailable_until_the_budget_ends(details, "s39")
     assert waits == [2, 4]                    # the next wait (8 s) would end past the 10 s budget
     assert retries == 2
     assert len(sent) == 1
@@ -501,14 +506,18 @@ def test_every_sandbox_unavailable_gives_up_after_budget():
 
 @pytest.mark.parametrize("details", [
     "failed to connect to all addresses; last error: UNKNOWN: ipv4:10.0.0.2:8080: Ssl handshake failed: "
-    "SSL_ERROR_SSL: certificate verify failed",
-    "Handshake read failed",
+    "SSL_ERROR_SSL: error:1000007d:SSL routines:OPENSSL_internal:CERTIFICATE_VERIFY_FAILED",    # wrong CA
+    "failed to connect to all addresses; last error: UNKNOWN: ipv4:10.0.0.2:8080: "
+    "Peer name judge-server is not in peer certificate",                                      # wrong hostname
 ])
-def test_an_unavailable_with_tls_details_is_waited_out_too(details):
-    # a sandbox restart that cuts a handshake reads like a bad certificate: retried for the whole budget
+def test_an_unavailable_naming_a_tls_failure_ends_at_once_without_a_retry(details):
+    # A wrong CA or hostname does not heal by waiting: it must not consume the retry window.
     waits, retries, sent = _unavailable_until_the_budget_ends(details, "s44")
-    assert waits == [2, 4] and retries == 2
-    assert [(v["status"], v["error_message"]) for v in sent] == [(verdict.SYSTEM_ERROR, infra_errors.GIVE_UP_MESSAGE)]
+    assert waits == [] and retries == 0
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    message = sent[0]["error_message"]
+    assert message == "UNAVAILABLE: " + details          # the one-line describe(exc), not the retry-budget message
+    assert message != infra_errors.GIVE_UP_MESSAGE and "\n" not in message
 
 
 def test_each_retry_announces_the_start_again():
