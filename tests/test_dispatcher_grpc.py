@@ -2,12 +2,14 @@
 show, namely the generated stub's method and metadata on the wire, the message size limit, and the exceptions gRPC
 really raises (their status code and details are what _is_retryable reads)."""
 import hashlib
+import re
 import socket
 import struct
 import threading
 import time
 from concurrent import futures
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import grpc
 import pytest
@@ -17,6 +19,8 @@ import infra_errors
 import judge_server_pb2 as pb
 import judge_server_pb2_grpc as pb_grpc
 import sandbox_health
+import verdict
+import worker
 
 CODE = grpc.StatusCode
 FIXTURES = Path(__file__).parent / "fixtures" / "tls"
@@ -144,16 +148,16 @@ def test_a_response_over_grpcs_default_4_mib_is_received(serve):
 
 # --- what the worker makes of the exceptions gRPC really raises (infra_errors) ---
 
-def test_a_real_refused_connection_is_waited_out_and_described_on_one_line(serve):
+def test_a_real_refused_connection_is_waited_out_and_never_shows_the_debug_dump(serve):
     with pytest.raises(grpc.RpcError) as caught:
         dispatcher.dispatch_judge([_refused_url()], "t", pb.JudgeRequest(), timeout=5)
     exc = caught.value
 
     assert len(str(exc).splitlines()) > 1                  # the debug dump that must not reach error_message
-    message = infra_errors.describe(exc)
-    assert message.startswith("UNAVAILABLE: ") and "Connection refused" in message
-    assert len(message.splitlines()) == 1
     assert infra_errors.transient_reason(exc) == "sandbox"
+    message = infra_errors.describe(exc)                   # (a waited-out failure is never shown: GIVE_UP_MESSAGE)
+    assert message == infra_errors.TLS_FAILURE_MESSAGE and len(message.splitlines()) == 1
+    assert "Connection refused" not in message and "127.0.0.1" not in message
 
 
 def test_a_real_invalid_argument_is_not_waited_out_and_described_on_one_line(serve):
@@ -175,7 +179,7 @@ def test_an_unavailable_naming_ssl_or_a_certificate_is_not_waited_out(serve):
         dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5)
 
     assert infra_errors.transient_reason(caught.value) is None
-    assert infra_errors.describe(caught.value) == "UNAVAILABLE: Ssl handshake failed: certificate verify failed"
+    assert infra_errors.describe(caught.value) == "UNAVAILABLE: the judge sandbox's TLS certificate check failed"
 
 
 # --- real TLS handshake failures: the details gRPC itself writes, through dispatch_judge to infra_errors ---
@@ -221,6 +225,35 @@ def _dispatch_failure(url):
     return caught.value
 
 
+def _published_message(url):
+    """The error_message the worker publishes for a submission judged on `url`, whose real dispatch_judge failure it
+    classifies and describes (worker.judge_with_infra_retry). Any wait fails the test: the failure must end at once."""
+    producer = MagicMock()
+    config = MagicMock(JUDGED_TOPIC="submission.judged", STARTED_TOPIC="submission.started", WORKER_ID="w1",
+                       PUBLISH_TIMEOUT_SECONDS=10, JUDGE_INFRA_RETRY_SECONDS=300)
+
+    def judge(*args, **kwargs):
+        return dispatcher.dispatch_judge([url], "t", pb.JudgeRequest(), timeout=5)
+
+    def no_wait(seconds):
+        pytest.fail(f"the worker waited {seconds} s on a failure that is permanent")
+
+    with patch("worker.process_event", side_effect=judge):
+        worker.handle_one({"submissionId": "s-tls"}, config, producer, wait=no_wait)
+    sent = [c.kwargs["value"] for c in producer.send.call_args_list if c.args[0] == "submission.judged"]
+    assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
+    return sent[0]["error_message"]
+
+
+def _assert_only_the_fixed_message_is_shown(message, caplog, *logged):
+    """The submitter reads the fixed line, with no address and none of gRPC's text; each of `logged` is in the log."""
+    assert message == "UNAVAILABLE: the judge sandbox's TLS certificate check failed"
+    assert "ipv4:" not in message and not re.search(r"\d+\.\d+\.\d+\.\d+", message)
+    assert "Ssl handshake failed" not in message and "Peer name" not in message and "\n" not in message
+    for text in logged:
+        assert text in caplog.text
+
+
 def test_a_real_tls_call_with_the_right_ca_and_certificate_is_judged(serve_tls, monkeypatch):
     # the control of the failures below: the same server and client succeed when nothing is misconfigured
     _worker_credentials(monkeypatch)
@@ -228,20 +261,23 @@ def test_a_real_tls_call_with_the_right_ca_and_certificate_is_judged(serve_tls, 
     assert out["data"][0]["result"] == 0
 
 
-def test_a_real_wrong_ca_is_a_permanent_tls_failure(serve_tls, monkeypatch):
+def test_a_real_wrong_ca_is_a_permanent_tls_failure(serve_tls, monkeypatch, caplog):
     # The worker trusts a certificate that did not sign the sandbox's: a wrong ca.crt in its OJ_TLS_DIR.
     _worker_credentials(monkeypatch, root="tls-probe.crt")
-    exc = _dispatch_failure(serve_tls(_Sandbox(reply=_accepted())))
+    url = serve_tls(_Sandbox(reply=_accepted()))
+    exc = _dispatch_failure(url)
 
     assert exc.code() == CODE.UNAVAILABLE                   # the status of a sandbox that is down, too
     assert "ssl" in exc.details().lower() or "certificate" in exc.details().lower()
     assert "CERTIFICATE_VERIFY_FAILED" in exc.details()
     assert infra_errors.transient_reason(exc) is None
-    message = infra_errors.describe(exc)
-    assert message.startswith("UNAVAILABLE: ") and "CERTIFICATE_VERIFY_FAILED" in message and "\n" not in message
+    assert "ipv4:127.0.0.1" in exc.details()                # the address that must not reach the submitter
+    # end to end: the submitter's line is fixed, and the log keeps the sandbox's address and gRPC's error text
+    _assert_only_the_fixed_message_is_shown(_published_message(url), caplog,
+                                            "ipv4:127.0.0.1", "Ssl handshake failed", "CERTIFICATE_VERIFY_FAILED")
 
 
-def test_a_real_hostname_mismatch_is_a_permanent_tls_failure(serve_tls):
+def test_a_real_hostname_mismatch_is_a_permanent_tls_failure(serve_tls, caplog):
     # The worker dials a name the sandbox's certificate does not carry (here the name is overridden: the fixture's
     # certificate holds localhost and 127.0.0.1 and the address is 127.0.0.1).
     url = serve_tls(_Sandbox(reply=_accepted()))
@@ -254,6 +290,8 @@ def test_a_real_hostname_mismatch_is_a_permanent_tls_failure(serve_tls):
 
     assert exc.code() == CODE.UNAVAILABLE and "Peer name judge-server is not in peer certificate" in exc.details()
     assert infra_errors.transient_reason(exc) is None
+    _assert_only_the_fixed_message_is_shown(_published_message(url), caplog,
+                                            "ipv4:127.0.0.1", "Peer name judge-server is not in peer certificate")
 
 
 def test_a_tls_failure_on_one_sandbox_still_fails_over_to_the_next(serve_tls, monkeypatch):

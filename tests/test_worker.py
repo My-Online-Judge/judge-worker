@@ -510,14 +510,20 @@ def test_every_sandbox_unavailable_gives_up_after_budget(details):
     "failed to connect to all addresses; last error: UNKNOWN: ipv4:10.0.0.2:8080: "
     "Peer name judge-server is not in peer certificate",                                      # wrong hostname
 ])
-def test_an_unavailable_naming_a_tls_failure_ends_at_once_without_a_retry(details):
+def test_an_unavailable_naming_a_tls_failure_ends_at_once_without_a_retry(details, caplog):
     # A wrong CA or hostname does not heal by waiting: it must not consume the retry window.
     waits, retries, sent = _unavailable_until_the_budget_ends(details, "s44")
     assert waits == [] and retries == 0
     assert [v["status"] for v in sent] == [verdict.SYSTEM_ERROR]
     message = sent[0]["error_message"]
-    assert message == "UNAVAILABLE: " + details          # the one-line describe(exc), not the retry-budget message
+    # the submitter reads a fixed line (not the retry-budget message, nothing of the sandbox's address or TLS error)...
+    assert message == "UNAVAILABLE: the judge sandbox's TLS certificate check failed" == infra_errors.TLS_FAILURE_MESSAGE
     assert message != infra_errors.GIVE_UP_MESSAGE and "\n" not in message
+    assert "ipv4" not in message and "10.0.0.2" not in message and "handshake" not in message
+    # ...while the log keeps the whole failure
+    failure = [r for r in caplog.records if r.name == "judge-worker" and r.levelname == "ERROR"]
+    assert len(failure) == 1 and failure[0].exc_info is not None
+    assert details in caplog.text
 
 
 def test_each_retry_announces_the_start_again():

@@ -10,6 +10,8 @@ import grpc_errors
 INFRA_RETRIES = Counter("oj_judge_infra_retries", "Judgings sent again because MinIO or every sandbox was away",
                         ["reason"])
 GIVE_UP_MESSAGE = "Judge infrastructure unavailable"
+# What a submitter reads when the sandbox's TLS check fails (describe): the one UNAVAILABLE that is not waited out.
+TLS_FAILURE_MESSAGE = "UNAVAILABLE: the judge sandbox's TLS certificate check failed"
 DELAY_START_SECONDS = 2
 DELAY_MAX_SECONDS = 60
 # What a submitter may read of a failure in error_message: one line, at most this long.
@@ -82,10 +84,16 @@ def _one_line(text):
 
 def describe(exc):
     """A failure as the one line the submitter reads in error_message. str() of a grpc.RpcError is a multi-line debug
-    dump (peer addresses, internal file names): a gRPC failure is `CODE_NAME: details` instead. The log keeps the whole
-    exception."""
+    dump (peer addresses, internal file names): a gRPC failure is `CODE_NAME: details` instead, the details being what
+    the sandbox wrote (e.g. "unknown seccomp rule"). The one exception is UNAVAILABLE, whose details are gRPC's and
+    OpenSSL's own text with the sandbox's internal address ("failed to connect to all addresses; last error: UNKNOWN:
+    ipv4:10.0.0.5:8080: Ssl handshake failed ..."): a submitter reads TLS_FAILURE_MESSAGE instead. Only a TLS failure
+    reaches here as UNAVAILABLE, every other one is waited out (transient_reason) and shown as GIVE_UP_MESSAGE. The log
+    keeps the whole exception (worker.judge_with_infra_retry)."""
     code = grpc_errors.code_of(exc)
     if code is None:
         return _one_line(str(exc))
+    if code == grpc.StatusCode.UNAVAILABLE:
+        return TLS_FAILURE_MESSAGE
     details = grpc_errors.details_of(exc)
     return _one_line(f"{code.name}: {details}" if details.strip() else code.name)

@@ -53,7 +53,8 @@ Sandbox chưa có `JudgeStream` (UNIMPLEMENTED) thì worker gọi lại `Judge` 
   chối chỉ hiện là `Socket closed` sau bắt tay, giống sandbox đang khởi động lại, nên vẫn được chờ. Không retry khi
   DEADLINE_EXCEEDED (sandbox có thể đang chấm) hay mã khác (INVALID_ARGUMENT, …). Với MinIO, lỗi chứng chỉ TLS (urllib3
   SSLError) cũng vĩnh viễn: không retry. Lỗi không retry thành SYSTEM_ERROR với `error_message` một dòng `MÃ_GRPC: chi tiết`
-  (tối đa 500 ký tự)
+  (tối đa 500 ký tự), trừ UNAVAILABLE (lỗi TLS ở trên): người nộp bài chỉ thấy dòng cố định `UNAVAILABLE: the judge sandbox's
+  TLS certificate check failed`, không có địa chỉ nội bộ của sandbox hay lỗi gốc của gRPC/OpenSSL; chi tiết đầy đủ chỉ nằm trong log
 - METRICS_PORT (default 9100) — Prometheus /metrics: oj_sandbox_up, oj_judge_dispatch_total, oj_run_expired_total
 - SANDBOX_HEARTBEAT_URL (vd https://submission-service:8000/api/judge_server_heartbeat/) — worker gọi gRPC `Ping` của
   từng sandbox rồi chuyển câu trả lời (hostname, judger_version, cpu_core, cpu, memory, running_jobs, max_jobs) về registry

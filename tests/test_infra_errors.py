@@ -189,20 +189,38 @@ def test_describe_caps_a_long_message():
     assert message.startswith("INTERNAL: x x") and 499 <= len(message) <= 500
 
 
+# What a submitter reads when the sandbox's TLS check fails: the one UNAVAILABLE that is not waited out. The details
+# of the failure (the sandbox's internal address, gRPC's and OpenSSL's error text) stay in the log.
+TLS_MESSAGE = "UNAVAILABLE: the judge sandbox's TLS certificate check failed"
+
+
 def test_describe_a_grpc_error_without_details_is_just_the_code_name():
-    assert infra_errors.describe(rpc_error(CODE.UNAVAILABLE, "")) == "UNAVAILABLE"
-    assert infra_errors.describe(rpc_error(CODE.UNAVAILABLE, None)) == "UNAVAILABLE"
+    assert infra_errors.describe(rpc_error(CODE.INTERNAL, "")) == "INTERNAL"
+    assert infra_errors.describe(rpc_error(CODE.RESOURCE_EXHAUSTED, None)) == "RESOURCE_EXHAUSTED"
 
 
 def test_describe_survives_details_that_raise():
     class Broken(grpc.RpcError):
+        def __init__(self, code):
+            super().__init__()
+            self._code = code
+
         def code(self):
-            return CODE.UNAVAILABLE
+            return self._code
 
         def details(self):
             raise RuntimeError("no details")
 
-    assert infra_errors.describe(Broken()) == "UNAVAILABLE"
+    assert infra_errors.describe(Broken(CODE.INTERNAL)) == "INTERNAL"
+    assert infra_errors.describe(Broken(CODE.UNAVAILABLE)) == TLS_MESSAGE
+
+
+@pytest.mark.parametrize("details", [WRONG_CA, HOSTNAME_MISMATCH, "Ssl handshake failed: certificate verify failed",
+                                     "Connection refused", "", None])
+def test_describe_a_grpc_unavailable_is_a_fixed_line_with_no_details(details):
+    message = infra_errors.describe(rpc_error(CODE.UNAVAILABLE, details))
+    assert message == TLS_MESSAGE == infra_errors.TLS_FAILURE_MESSAGE
+    assert "ipv4" not in message and "Ssl handshake failed" not in message and "\n" not in message
 
 
 def test_describe_a_grpc_error_without_a_code_falls_back_to_its_text():
